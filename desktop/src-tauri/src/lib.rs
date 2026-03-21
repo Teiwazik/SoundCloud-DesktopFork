@@ -73,7 +73,9 @@ pub fn run() {
                 target: u32,
                 unlocked: bool,
             }
+            #[allow(unused)]
             let mut target = 60;
+            #[allow(unused)]
             let mut unlocked = false;
             if let Ok(data) = std::fs::read_to_string(&config_path) {
                 if let Ok(cfg) = serde_json::from_str::<FramerateConfig>(&data) {
@@ -83,6 +85,7 @@ pub fn run() {
             }
 
             // Create main window dynamically
+            #[allow(unused_mut)]
             let mut win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("SoundCloud Desktop")
                 .inner_size(1200.0, 800.0)

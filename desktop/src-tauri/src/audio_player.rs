@@ -1234,12 +1234,12 @@ pub fn start_visualizer_thread(app: &AppHandle) {
                 fft.process(&mut complex_buffer);
 
                 let mut bins = vec![0u8; 64];
-                let max_freq = 20000.0;
-                let sample_rate = 48000.0;
+                let max_freq: f32 = 20000.0;
+                let sample_rate: f32 = 48000.0;
                 
                 for i in 0..64 {
-                    let min_f = 20.0 * (max_freq / 20.0).powf(i as f32 / 64.0);
-                    let max_f = 20.0 * (max_freq / 20.0).powf((i + 1) as f32 / 64.0);
+                    let min_f = 20.0f32 * (max_freq / 20.0f32).powf(i as f32 / 64.0);
+                    let max_f = 20.0f32 * (max_freq / 20.0f32).powf((i + 1) as f32 / 64.0);
                     
                     let min_idx = ((min_f / sample_rate) * FFT_SIZE as f32) as usize;
                     let max_idx = ((max_f / sample_rate) * FFT_SIZE as f32) as usize;
