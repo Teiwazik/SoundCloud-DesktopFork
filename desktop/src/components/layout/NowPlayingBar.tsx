@@ -25,9 +25,10 @@ import {
 } from '../../lib/icons';
 import { optimisticToggleLike } from '../../lib/likes';
 import { useLyricsStore } from '../../stores/lyrics';
-import { type Track, usePlayerStore } from '../../stores/player';
+import { usePlayerStore, type Track } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
 import { EqualizerPanel } from '../music/EqualizerPanel';
+import { Visualizer } from '../music/Visualizer';
 
 /* ── Progress Slider ─────────────────────────────────────────── */
 
@@ -432,10 +433,16 @@ export const NowPlayingBar = React.memo(
     return (
       <div className="shrink-0 relative">
         <BackgroundGlow />
-        {/* Isolated layer — repaints here won't cascade to blur background */}
-        <div className="relative" style={{ isolation: 'isolate' }}>
-          <ProgressSlider />
+        
+        {useSettingsStore((s) => s.visualizerPlaybar) && (
+          <div className="absolute bottom-full left-0 right-0 h-24 pointer-events-none opacity-50 z-0 mask-image-bottom-fade">
+            <Visualizer />
+          </div>
+        )}
 
+        {/* Isolated layer — repaints here won't cascade to blur background */}
+        <div className="relative z-10" style={{ isolation: 'isolate' }}>
+          <ProgressSlider />
           <div className="h-[76px] flex items-center px-5 gap-3 relative">
             {/* Left: track info */}
             <TrackInfo />

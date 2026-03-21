@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use rustfft::{FftPlanner, num_complex::Complex};
 use biquad::{Biquad, Coefficients, DirectForm1, Hertz, ToHertz, Type, Q_BUTTERWORTH_F64};
 use rodio::mixer::Mixer;
 use rodio::source::SeekError;
@@ -182,6 +183,49 @@ impl<S: Source<Item = f32>> Source for EqSource<S> {
     }
 }
 
+/* ── Visualizer Source ─────────────────────────────────────── */
+
+const FFT_SIZE: usize = 2048;
+
+struct AnalyzerSource<S: Source<Item = f32>> {
+    source: S,
+    buffer: Vec<f32>,
+    sender: std::sync::mpsc::SyncSender<Vec<f32>>,
+}
+
+impl<S: Source<Item = f32>> AnalyzerSource<S> {
+    fn new(source: S, sender: std::sync::mpsc::SyncSender<Vec<f32>>) -> Self {
+        Self {
+            source,
+            buffer: Vec::with_capacity(FFT_SIZE),
+            sender,
+        }
+    }
+}
+
+impl<S: Source<Item = f32>> Iterator for AnalyzerSource<S> {
+    type Item = f32;
+
+    #[inline]
+    fn next(&mut self) -> Option<f32> {
+        let sample = self.source.next()?;
+        self.buffer.push(sample);
+        if self.buffer.len() >= FFT_SIZE {
+            let _ = self.sender.try_send(std::mem::take(&mut self.buffer));
+            self.buffer.reserve(FFT_SIZE);
+        }
+        Some(sample)
+    }
+}
+
+impl<S: Source<Item = f32>> Source for AnalyzerSource<S> {
+    fn current_span_len(&self) -> Option<usize> { self.source.current_span_len() }
+    fn channels(&self) -> ChannelCount { self.source.channels() }
+    fn sample_rate(&self) -> SampleRate { self.source.sample_rate() }
+    fn total_duration(&self) -> Option<Duration> { self.source.total_duration() }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> { self.source.try_seek(pos) }
+}
+
 /* ── OGG/Opus Source ───────────────────────────────────────── */
 
 struct OpusSource {
@@ -343,6 +387,7 @@ fn create_player_from_bytes(
     mixer: &Mixer,
     volume: f32,
     eq_params: Arc<RwLock<EqParams>>,
+    vis_tx: Option<std::sync::mpsc::SyncSender<Vec<f32>>>,
 ) -> Result<(Player, Option<f64>), String> {
     let player = Player::connect_new(mixer);
     player.set_volume(volume);
@@ -350,12 +395,22 @@ fn create_player_from_bytes(
     let duration;
     if let Ok(source) = Decoder::new(Cursor::new(bytes.to_vec())) {
         duration = source.total_duration().map(|d| d.as_secs_f64());
-        player.append(EqSource::new(source, eq_params));
+        let eq_source = EqSource::new(source, eq_params);
+        if let Some(ref tx) = vis_tx {
+            player.append(AnalyzerSource::new(eq_source, tx.clone()));
+        } else {
+            player.append(eq_source);
+        }
     } else {
         let source = OpusSource::new(bytes.to_vec())
             .map_err(|e| format!("Failed to decode: {}", e))?;
         duration = source.total_duration().map(|d| d.as_secs_f64());
-        player.append(EqSource::new(source, eq_params));
+        let eq_source = EqSource::new(source, eq_params);
+        if let Some(ref tx) = vis_tx {
+            player.append(AnalyzerSource::new(eq_source, tx.clone()));
+        } else {
+            player.append(eq_source);
+        }
     }
 
     Ok((player, duration))
@@ -401,6 +456,7 @@ pub struct AudioState {
     audio_tx: std::sync::mpsc::Sender<AudioThreadCmd>,
     /// Saved source bytes for seek fallback (reload + seek forward)
     source_bytes: Mutex<Option<Vec<u8>>>,
+    pub visualizer_tx: Mutex<Option<std::sync::mpsc::SyncSender<Vec<f32>>>>,
 }
 
 fn open_device_sink(
@@ -538,6 +594,7 @@ pub fn init() -> AudioState {
         media_tx: Mutex::new(None),
         audio_tx: cmd_tx,
         source_bytes: Mutex::new(None),
+        visualizer_tx: Mutex::new(None),
     }
 }
 
@@ -744,7 +801,7 @@ pub fn audio_load_file(path: String, state: tauri::State<'_, AudioState>) -> Res
 
     let mixer = state.mixer.lock().unwrap().clone();
     let vol = *state.volume.lock().unwrap();
-    let (new_player, duration_secs) = create_player_from_bytes(&bytes, &mixer, vol, state.eq_params.clone())?;
+    let (new_player, duration_secs) = create_player_from_bytes(&bytes, &mixer, vol, state.eq_params.clone(), state.visualizer_tx.lock().unwrap().clone())?;
 
     *state.player.lock().unwrap() = Some(new_player);
     *state.source_bytes.lock().unwrap() = Some(bytes);
@@ -813,7 +870,7 @@ pub async fn audio_load_url(
     // Decode and play
     let mixer = state.mixer.lock().unwrap().clone();
     let vol = *state.volume.lock().unwrap();
-    let (new_player, duration_secs) = create_player_from_bytes(&bytes, &mixer, vol, state.eq_params.clone())?;
+    let (new_player, duration_secs) = create_player_from_bytes(&bytes, &mixer, vol, state.eq_params.clone(), state.visualizer_tx.lock().unwrap().clone())?;
 
     *state.player.lock().unwrap() = Some(new_player);
     *state.source_bytes.lock().unwrap() = Some(bytes);
@@ -879,7 +936,7 @@ pub fn audio_seek(position: f64, state: tauri::State<'_, AudioState>) -> Result<
 
     let mixer = state.mixer.lock().unwrap().clone();
     let vol = *state.volume.lock().unwrap();
-    let (new_player, _) = create_player_from_bytes(&bytes, &mixer, vol, state.eq_params.clone())?;
+    let (new_player, _) = create_player_from_bytes(&bytes, &mixer, vol, state.eq_params.clone(), state.visualizer_tx.lock().unwrap().clone())?;
 
     if position > 0.0 {
         new_player.try_seek(target).ok();
@@ -1134,4 +1191,74 @@ pub async fn save_track_to_path(
         .await
         .map_err(|e| format!("Copy failed: {}", e))?;
     Ok(dest_path)
+}
+
+/* ── Visualizer Thread ────────────────────────────────────── */
+
+pub fn start_visualizer_thread(app: &AppHandle) {
+    let handle = app.clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(2);
+
+    let state = app.state::<AudioState>();
+    *state.visualizer_tx.lock().unwrap() = Some(tx);
+
+    std::thread::Builder::new()
+        .name("audio-visualizer".into())
+        .spawn(move || {
+            let mut planner = FftPlanner::new();
+            let fft = planner.plan_fft_forward(FFT_SIZE);
+            let mut complex_buffer = vec![Complex { re: 0.0, im: 0.0 }; FFT_SIZE];
+            let mut window = vec![0.0f32; FFT_SIZE];
+            
+            use std::f32::consts::PI;
+            for i in 0..FFT_SIZE {
+                window[i] = 0.5 * (1.0 - (2.0 * PI * i as f32 / (FFT_SIZE as f32 - 1.0)).cos());
+            }
+
+            while let Ok(samples) = rx.recv() {
+                let mut is_silent = true;
+                for i in 0..FFT_SIZE {
+                    let s = samples[i];
+                    if s.abs() > 0.001 { is_silent = false; }
+                    complex_buffer[i] = Complex {
+                        re: s * window[i],
+                        im: 0.0,
+                    };
+                }
+
+                if is_silent {
+                    handle.emit("audio:visualizer", vec![0u8; 64]).ok();
+                    continue;
+                }
+
+                fft.process(&mut complex_buffer);
+
+                let mut bins = vec![0u8; 64];
+                let max_freq = 20000.0;
+                let sample_rate = 48000.0;
+                
+                for i in 0..64 {
+                    let min_f = 20.0 * (max_freq / 20.0).powf(i as f32 / 64.0);
+                    let max_f = 20.0 * (max_freq / 20.0).powf((i + 1) as f32 / 64.0);
+                    
+                    let min_idx = ((min_f / sample_rate) * FFT_SIZE as f32) as usize;
+                    let max_idx = ((max_f / sample_rate) * FFT_SIZE as f32) as usize;
+                    let min_idx = min_idx.max(1).min(FFT_SIZE / 2 - 1);
+                    let max_idx = max_idx.max(min_idx + 1).min(FFT_SIZE / 2);
+
+                    let mut sum = 0.0;
+                    for j in min_idx..max_idx {
+                        let c = complex_buffer[j];
+                        sum += (c.re * c.re + c.im * c.im).sqrt();
+                    }
+                    let avg = sum / (max_idx - min_idx).max(1) as f32;
+                    
+                    let val = (avg * 1.5).min(255.0) as u8;
+                    bins[i] = val;
+                }
+                
+                handle.emit("audio:visualizer", bins).ok();
+            }
+        })
+        .expect("failed to spawn visualizer thread");
 }

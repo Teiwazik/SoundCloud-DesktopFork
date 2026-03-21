@@ -140,6 +140,7 @@ pub fn run() {
             app.manage(audio_state);
             audio_player::start_tick_emitter(app.handle());
             audio_player::start_media_controls(app.handle());
+            audio_player::start_visualizer_thread(app.handle());
 
             tray::setup_tray(app).expect("failed to setup tray");
 

@@ -59,6 +59,9 @@ export interface SettingsState {
   eqPreset: string;
   sidebarCollapsed: boolean;
   floatingComments: boolean;
+  visualizerStyle: 'Off' | 'Bars' | 'Wave' | 'Pulse';
+  visualizerPlaybar: boolean;
+  visualizerFullscreen: boolean;
   targetFramerate: number;
   unlockFramerate: boolean;
   showFpsCounter: boolean;
@@ -76,6 +79,9 @@ export interface SettingsState {
   setEqBand: (index: number, gain: number) => void;
   toggleSidebar: () => void;
   setFloatingComments: (v: boolean) => void;
+  setVisualizerStyle: (style: 'Off' | 'Bars' | 'Wave' | 'Pulse') => void;
+  setVisualizerPlaybar: (v: boolean) => void;
+  setVisualizerFullscreen: (v: boolean) => void;
   setTargetFramerate: (fps: number) => void;
   setUnlockFramerate: (unlocked: boolean) => void;
   setShowFpsCounter: (show: boolean) => void;
@@ -98,6 +104,9 @@ const DEFAULTS = {
   eqPreset: 'flat',
   sidebarCollapsed: false,
   floatingComments: true,
+  visualizerStyle: 'Off' as const,
+  visualizerPlaybar: true,
+  visualizerFullscreen: false,
   targetFramerate: 60,
   unlockFramerate: false,
   showFpsCounter: false,
@@ -133,6 +142,9 @@ export const useSettingsStore = create<SettingsState>()(
         }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setFloatingComments: (floatingComments) => set({ floatingComments }),
+      setVisualizerStyle: (visualizerStyle) => set({ visualizerStyle }),
+      setVisualizerPlaybar: (visualizerPlaybar) => set({ visualizerPlaybar }),
+      setVisualizerFullscreen: (visualizerFullscreen) => set({ visualizerFullscreen }),
       setTargetFramerate: (targetFramerate) => {
         set({ targetFramerate });
         invoke('save_framerate_config', { target: targetFramerate, unlocked: get().unlockFramerate }).catch(console.error);

@@ -544,6 +544,48 @@ const ThemeSection = React.memo(function ThemeSection() {
           />
         </div>
       )}
+
+      {/* Audio Visualizer */}
+      <div className="space-y-4 pt-4 border-t border-white/[0.05]">
+        <h4 className="text-[13px] text-white/50 font-medium">{t('settings.visualizer') || 'Visualizer'}</h4>
+        <div className="flex gap-2 bg-white/[0.04] p-1 rounded-xl">
+          {['Off', 'Bars', 'Wave', 'Pulse'].map((style) => {
+            const isActive = useSettingsStore((s) => s.visualizerStyle) === style;
+            return (
+              <button
+                key={style}
+                className={`flex-1 text-[12px] font-medium py-1.5 rounded-lg transition-all cursor-pointer ${
+                  isActive
+                    ? 'bg-white/10 text-white'
+                    : 'text-white/40 hover:text-white/60'
+                }`}
+                onClick={() => useSettingsStore.getState().setVisualizerStyle(style as any)}
+              >
+                {style}
+              </button>
+            );
+          })}
+        </div>
+        
+        <div className="flex items-center justify-between">
+          <span className="text-[13px] text-white/60">{t('settings.visualizerPlaybar') || 'Show above playbar'}</span>
+          <input
+            type="checkbox"
+            checked={useSettingsStore((s) => s.visualizerPlaybar)}
+            onChange={(e) => useSettingsStore.getState().setVisualizerPlaybar(e.target.checked)}
+            className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+          />
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-[13px] text-white/60">{t('settings.visualizerFullscreen') || 'Show in Track Page / Fullscreen'}</span>
+          <input
+            type="checkbox"
+            checked={useSettingsStore((s) => s.visualizerFullscreen)}
+            onChange={(e) => useSettingsStore.getState().setVisualizerFullscreen(e.target.checked)}
+            className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+          />
+        </div>
+      </div>
     </section>
   );
 });

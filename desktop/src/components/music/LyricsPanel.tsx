@@ -24,9 +24,11 @@ import type { LyricLine } from '../../lib/lyrics';
 import { searchLyrics } from '../../lib/lyrics';
 import { useLyricsStore } from '../../stores/lyrics';
 import { type Track, usePlayerStore } from '../../stores/player';
+import { useSettingsStore } from '../../stores/settings';
 import { ProgressSlider, ProgressTime } from '../layout/NowPlayingBar';
 import { AddToPlaylistDialog } from './AddToPlaylistDialog';
 import { FloatingComments } from './FloatingComments';
+import { Visualizer } from './Visualizer';
 
 /* ── Color extraction ──────────────────────────────────────── */
 
@@ -87,6 +89,11 @@ const FullscreenBackground = React.memo(
             `,
           }}
         />
+        {useSettingsStore((s) => s.visualizerFullscreen) && (
+          <div className="absolute inset-0 opacity-30 z-0 [mask-image:linear-gradient(to_top,black,transparent)] mix-blend-screen scale-y-125 mb-[-20%]">
+            <Visualizer className="opacity-60" />
+          </div>
+        )}
       </div>
     );
   },
