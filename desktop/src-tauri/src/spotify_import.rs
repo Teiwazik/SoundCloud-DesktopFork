@@ -316,7 +316,7 @@ pub async fn spotify_import_start(
             not_found += 1;
         }
 
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     app.emit("spotify_import:progress", SpotifyImportProgress {

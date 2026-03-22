@@ -1,3 +1,3 @@
 git add .
-git commit -m "fix: Rust compile errors - remove double semicolons and fix map_err closures"
+git commit -m "perf: Reduce import delay 400->100ms, always show result playlist"
 git push

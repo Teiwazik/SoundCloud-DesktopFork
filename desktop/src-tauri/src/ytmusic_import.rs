@@ -327,7 +327,7 @@ pub async fn ytmusic_import_start(
             not_found += 1;
         }
 
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     app.emit("ytmusic_import:progress", YtMusicImportProgress {

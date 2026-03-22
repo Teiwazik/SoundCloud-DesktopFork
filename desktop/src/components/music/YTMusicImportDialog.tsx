@@ -131,7 +131,7 @@ export function YTMusicImportDialog({
       });
       setDone(true);
       setRunning(false);
-      if (urns.length > 0) await findOrCreatePlaylist(urns);
+      await findOrCreatePlaylist(urns);
     } catch (e) {
       setError(String(e));
       setRunning(false);
