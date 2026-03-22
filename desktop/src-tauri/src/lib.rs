@@ -4,9 +4,11 @@ mod discord;
 mod proxy;
 mod proxy_server;
 mod server;
+mod spotify_import;
 mod static_server;
 mod tray;
 mod ym_import;
+mod ytmusic_import;
 
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -141,6 +143,8 @@ pub fn run() {
 
             let audio_state = audio_player::init();
             app.manage(audio_state);
+            app.manage(spotify_import::SpotifyState::new());
+            app.manage(ytmusic_import::YtMusicState::new());
             audio_player::start_tick_emitter(app.handle());
             audio_player::start_media_controls(app.handle());
             audio_player::start_visualizer_thread(app.handle());
@@ -179,6 +183,16 @@ pub fn run() {
             audio_player::save_track_to_path,
             ym_import::ym_import_start,
             ym_import::ym_import_stop,
+            spotify_import::spotify_auth_start,
+            spotify_import::spotify_is_authed,
+            spotify_import::spotify_logout,
+            spotify_import::spotify_import_start,
+            spotify_import::spotify_import_stop,
+            ytmusic_import::ytmusic_auth_start,
+            ytmusic_import::ytmusic_is_authed,
+            ytmusic_import::ytmusic_logout,
+            ytmusic_import::ytmusic_import_start,
+            ytmusic_import::ytmusic_import_stop,
             save_framerate_config,
         ])
         .run(tauri::generate_context!())

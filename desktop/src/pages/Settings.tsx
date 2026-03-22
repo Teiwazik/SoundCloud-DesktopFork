@@ -935,21 +935,47 @@ const PlaybackSection = React.memo(function PlaybackSection() {
 const ImportSection = React.memo(function ImportSection() {
   const { t } = useTranslation();
   const [ymOpen, setYmOpen] = useState(false);
+  const [spotifyOpen, setSpotifyOpen] = useState(false);
+  const [ytOpen, setYtOpen] = useState(false);
 
   return (
     <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl">
       <h3 className="text-[15px] font-bold text-white/80 tracking-tight mb-4">
         {t('settings.import')}
       </h3>
-      <button
-        onClick={() => setYmOpen(true)}
-        className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold bg-white/[0.06] text-white/70 hover:bg-white/[0.1] border border-white/[0.06] hover:border-white/[0.12] transition-all duration-300 cursor-pointer"
-      >
-        {t('settings.importYandex')}
-      </button>
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={() => setYmOpen(true)}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold bg-white/[0.06] text-white/70 hover:bg-white/[0.1] border border-white/[0.06] hover:border-white/[0.12] transition-all duration-300 cursor-pointer"
+        >
+          {t('settings.importYandex')}
+        </button>
+        <button
+          onClick={() => setSpotifyOpen(true)}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold bg-[#1db954]/10 text-[#1db954] hover:bg-[#1db954]/20 border border-[#1db954]/20 hover:border-[#1db954]/30 transition-all duration-300 cursor-pointer"
+        >
+          ▶ Import from Spotify
+        </button>
+        <button
+          onClick={() => setYtOpen(true)}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/30 transition-all duration-300 cursor-pointer"
+        >
+          ▶ Import from YouTube Music
+        </button>
+      </div>
       {ymOpen && (
         <React.Suspense fallback={null}>
           <YMImportDialogLazy open={ymOpen} onOpenChange={setYmOpen} />
+        </React.Suspense>
+      )}
+      {spotifyOpen && (
+        <React.Suspense fallback={null}>
+          <SpotifyImportDialogLazy open={spotifyOpen} onOpenChange={setSpotifyOpen} />
+        </React.Suspense>
+      )}
+      {ytOpen && (
+        <React.Suspense fallback={null}>
+          <YTMusicImportDialogLazy open={ytOpen} onOpenChange={setYtOpen} />
         </React.Suspense>
       )}
     </section>
@@ -957,6 +983,8 @@ const ImportSection = React.memo(function ImportSection() {
 });
 
 const YMImportDialogLazy = React.lazy(() => import('../components/music/YMImportDialog'));
+const SpotifyImportDialogLazy = React.lazy(() => import('../components/music/SpotifyImportDialog'));
+const YTMusicImportDialogLazy = React.lazy(() => import('../components/music/YTMusicImportDialog'));
 
 /* ── Account Section ────────────────────────────────────── */
 

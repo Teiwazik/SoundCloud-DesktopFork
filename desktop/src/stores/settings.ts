@@ -57,6 +57,8 @@ export interface SettingsState {
   eqEnabled: boolean;
   eqGains: number[];
   eqPreset: string;
+  spotifyClientId: string;
+  youtubeClientId: string;
   sidebarCollapsed: boolean;
   floatingComments: boolean;
   visualizerStyle: 'Off' | 'Bars' | 'Wave' | 'Pulse';
@@ -88,6 +90,8 @@ export interface SettingsState {
   setEqGains: (gains: number[]) => void;
   setEqPreset: (preset: string) => void;
   setEqBand: (index: number, gain: number) => void;
+  setSpotifyClientId: (id: string) => void;
+  setYoutubeClientId: (id: string) => void;
   toggleSidebar: () => void;
   setFloatingComments: (v: boolean) => void;
   setVisualizerStyle: (style: 'Off' | 'Bars' | 'Wave' | 'Pulse') => void;
@@ -124,6 +128,8 @@ const DEFAULTS = {
   eqEnabled: false,
   eqGains: DEFAULT_EQ_GAINS,
   eqPreset: 'flat',
+  spotifyClientId: '',
+  youtubeClientId: '',
   sidebarCollapsed: false,
   floatingComments: true,
   visualizerStyle: 'Wave' as const,
@@ -181,6 +187,8 @@ export const useSettingsStore = create<SettingsState>()(
           return { eqGains, eqPreset: 'custom' };
         });
       },
+      setSpotifyClientId: (spotifyClientId) => set({ spotifyClientId }),
+      setYoutubeClientId: (youtubeClientId) => set({ youtubeClientId }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setFloatingComments: (floatingComments) => set({ floatingComments }),
       setVisualizerStyle: (visualizerStyle) => set({ visualizerStyle }),
@@ -224,6 +232,8 @@ export const useSettingsStore = create<SettingsState>()(
         eqEnabled: s.eqEnabled,
         eqGains: s.eqGains,
         eqPreset: s.eqPreset,
+        spotifyClientId: s.spotifyClientId,
+        youtubeClientId: s.youtubeClientId,
         sidebarCollapsed: s.sidebarCollapsed,
         floatingComments: s.floatingComments,
         targetFramerate: s.targetFramerate,
