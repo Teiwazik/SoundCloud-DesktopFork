@@ -585,6 +585,76 @@ const ThemeSection = React.memo(function ThemeSection() {
             className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
           />
         </div>
+        
+        <div className="flex items-center justify-between pt-2">
+          <span className="text-[13px] text-white/60">{t('settings.visualizerThemeColor') || 'Use Theme Color'}</span>
+          <input
+            type="checkbox"
+            checked={useSettingsStore((s) => s.visualizerThemeColor)}
+            onChange={(e) => useSettingsStore.getState().setVisualizerThemeColor(e.target.checked)}
+            className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+          />
+        </div>
+
+        <div className="space-y-2 pt-2">
+          <div className="flex items-center justify-between">
+            <label className="text-[13px] text-white/60">
+              {t('settings.visualizerScale') || 'Scale'}
+            </label>
+            <span className="text-[12px] text-white/40 tabular-nums">
+              {useSettingsStore((s) => s.visualizerScale)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min={50}
+            max={200}
+            step={10}
+            value={useSettingsStore((s) => s.visualizerScale)}
+            onChange={(e) => useSettingsStore.getState().setVisualizerScale(Number(e.target.value))}
+            className="w-full accent-[var(--color-accent)] h-1 bg-white/10 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-lg"
+          />
+        </div>
+
+        <div className="space-y-2 pt-2">
+          <div className="flex items-center justify-between">
+            <label className="text-[13px] text-white/60">
+              {t('settings.visualizerXOffset') || 'X-Offset (pixels)'}
+            </label>
+            <span className="text-[12px] text-white/40 tabular-nums">
+              {useSettingsStore((s) => s.visualizerXOffset)}px
+            </span>
+          </div>
+          <input
+            type="range"
+            min={-500}
+            max={500}
+            step={10}
+            value={useSettingsStore((s) => s.visualizerXOffset)}
+            onChange={(e) => useSettingsStore.getState().setVisualizerXOffset(Number(e.target.value))}
+            className="w-full accent-[var(--color-accent)] h-1 bg-white/10 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-lg"
+          />
+        </div>
+
+        <div className="space-y-2 pt-2">
+          <div className="flex items-center justify-between">
+            <label className="text-[13px] text-white/60">
+              {t('settings.visualizerYOffset') || 'Y-Offset (pixels)'}
+            </label>
+            <span className="text-[12px] text-white/40 tabular-nums">
+              {useSettingsStore((s) => s.visualizerYOffset)}px
+            </span>
+          </div>
+          <input
+            type="range"
+            min={-300}
+            max={300}
+            step={10}
+            value={useSettingsStore((s) => s.visualizerYOffset)}
+            onChange={(e) => useSettingsStore.getState().setVisualizerYOffset(Number(e.target.value))}
+            className="w-full accent-[var(--color-accent)] h-1 bg-white/10 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-lg"
+          />
+        </div>
       </div>
     </section>
   );

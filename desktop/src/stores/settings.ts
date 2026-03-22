@@ -62,6 +62,10 @@ export interface SettingsState {
   visualizerStyle: 'Off' | 'Bars' | 'Wave' | 'Pulse';
   visualizerPlaybar: boolean;
   visualizerFullscreen: boolean;
+  visualizerThemeColor: boolean;
+  visualizerScale: number;
+  visualizerXOffset: number;
+  visualizerYOffset: number;
   targetFramerate: number;
   unlockFramerate: boolean;
   showFpsCounter: boolean;
@@ -82,6 +86,10 @@ export interface SettingsState {
   setVisualizerStyle: (style: 'Off' | 'Bars' | 'Wave' | 'Pulse') => void;
   setVisualizerPlaybar: (v: boolean) => void;
   setVisualizerFullscreen: (v: boolean) => void;
+  setVisualizerThemeColor: (v: boolean) => void;
+  setVisualizerScale: (v: number) => void;
+  setVisualizerXOffset: (v: number) => void;
+  setVisualizerYOffset: (v: number) => void;
   setTargetFramerate: (fps: number) => void;
   setUnlockFramerate: (unlocked: boolean) => void;
   setShowFpsCounter: (show: boolean) => void;
@@ -107,6 +115,10 @@ const DEFAULTS = {
   visualizerStyle: 'Off' as const,
   visualizerPlaybar: true,
   visualizerFullscreen: false,
+  visualizerThemeColor: true,
+  visualizerScale: 100,
+  visualizerXOffset: 0,
+  visualizerYOffset: 0,
   targetFramerate: 60,
   unlockFramerate: false,
   showFpsCounter: false,
@@ -145,6 +157,10 @@ export const useSettingsStore = create<SettingsState>()(
       setVisualizerStyle: (visualizerStyle) => set({ visualizerStyle }),
       setVisualizerPlaybar: (visualizerPlaybar) => set({ visualizerPlaybar }),
       setVisualizerFullscreen: (visualizerFullscreen) => set({ visualizerFullscreen }),
+      setVisualizerThemeColor: (visualizerThemeColor) => set({ visualizerThemeColor }),
+      setVisualizerScale: (visualizerScale) => set({ visualizerScale }),
+      setVisualizerXOffset: (visualizerXOffset) => set({ visualizerXOffset }),
+      setVisualizerYOffset: (visualizerYOffset) => set({ visualizerYOffset }),
       setTargetFramerate: (targetFramerate) => {
         set({ targetFramerate });
         invoke('save_framerate_config', { target: targetFramerate, unlocked: get().unlockFramerate }).catch(console.error);

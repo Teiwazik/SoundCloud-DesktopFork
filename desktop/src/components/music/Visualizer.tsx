@@ -9,12 +9,32 @@ interface VisualizerProps {
   style?: VisualizerStyle;
 }
 
+// Parse hex to RGB to allow alpha blending on canvas
+function hexToRgb(hex: string) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result
+    ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) }
+    : { r: 255, g: 255, b: 255 };
+}
+
 export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   // Use passed style or subscribe directly to global settings
   const storeStyle = useSettingsStore((s) => s.visualizerStyle);
   const currentStyle = style || storeStyle || 'Off';
+
+  const themeColorOpt = useSettingsStore((s) => s.visualizerThemeColor);
+  const accentColorHex = useSettingsStore((s) => s.accentColor);
+  const vizScale = useSettingsStore((s) => s.visualizerScale) / 100;
+  const vizXOffset = useSettingsStore((s) => s.visualizerXOffset);
+  const vizYOffset = useSettingsStore((s) => s.visualizerYOffset);
+
+  // We capture the base Color outside of the drawing loop so it updates dynamically
+  const baseRgb = useRef(hexToRgb('#ffffff'));
+  useEffect(() => {
+    baseRgb.current = themeColorOpt ? hexToRgb(accentColorHex) : hexToRgb('#ffffff');
+  }, [themeColorOpt, accentColorHex]);
 
   useEffect(() => {
     if (currentStyle === 'Off') return;
@@ -61,12 +81,13 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         const barWidth = width / 64;
         const gap = Math.max(1, barWidth * 0.2);
         const activeWidth = barWidth - gap;
+        const { r, g, b } = baseRgb.current;
 
         for (let i = 0; i < 64; i++) {
           const val = currentBins[i];
           const h = (val / 255) * height;
           
-          ctx.fillStyle = `rgba(255, 255, 255, ${Math.max(0.1, val / 255)})`;
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.max(0.1, val / 255)})`;
           const x = i * barWidth;
           const y = height - h;
           
@@ -96,13 +117,14 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         }
         
         ctx.lineTo(width, height);
+        const { r, g, b } = baseRgb.current;
         const gradient = ctx.createLinearGradient(0, 0, 0, height);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
-        gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+        gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.5)`);
+        gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.0)`);
         ctx.fillStyle = gradient;
         ctx.fill();
         
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
         ctx.lineWidth = 2;
         ctx.stroke();
       } else if (currentStyle === 'Pulse') {
@@ -117,9 +139,10 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         ctx.beginPath();
         ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
         
+        const { r, g, b } = baseRgb.current;
         const gradient = ctx.createRadialGradient(centerX, centerY, radius * 0.5, centerX, centerY, radius * 1.5);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
-        gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+        gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.8)`);
+        gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.0)`);
         
         ctx.fillStyle = gradient;
         ctx.fill();
@@ -142,6 +165,11 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
     <canvas
       ref={canvasRef}
       className={`pointer-events-none ${className}`}
+      style={{
+        transform: `translate(${vizXOffset}px, ${vizYOffset}px) scale(${vizScale})`,
+        transformOrigin: "bottom center",
+        transition: "transform 0.15s ease-out"
+      }}
     />
   );
 };
