@@ -18,10 +18,11 @@ import {
   SkipForward,
   shuffleIcon16,
   X,
+  Search,
 } from '../../lib/icons';
 import { optimisticToggleLike, useLiked } from '../../lib/likes';
-import type { LyricLine } from '../../lib/lyrics';
-import { searchLyrics } from '../../lib/lyrics';
+import type { LyricLine, LyricsSource } from '../../lib/lyrics';
+import { searchLyrics, splitArtistTitle } from '../../lib/lyrics';
 import { useLyricsStore } from '../../stores/lyrics';
 import { type Track, usePlayerStore } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
@@ -29,6 +30,24 @@ import { ProgressSlider, ProgressTime } from '../layout/NowPlayingBar';
 import { AddToPlaylistDialog } from './AddToPlaylistDialog';
 import { FloatingComments } from './FloatingComments';
 import { Visualizer } from './Visualizer';
+
+/* ── Source Badge ──────────────────────────────────────── */
+
+const SOURCE_LABELS: Record<LyricsSource, string> = {
+  lrclib: 'LRCLib',
+  netease: 'NetEase',
+  musixmatch: 'Musixmatch',
+  genius: 'Genius',
+  textyl: 'Textyl',
+};
+
+const LyricsSourceBadge = React.memo(({ source }: { source: LyricsSource }) => (
+  <div className="flex justify-end px-12 pt-3 pb-0">
+    <span className="text-[10px] font-semibold text-white/20 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">
+      {SOURCE_LABELS[source]}
+    </span>
+  </div>
+));
 
 /* ── Color extraction ──────────────────────────────────────── */
 
@@ -369,13 +388,26 @@ export const LyricsPanel = React.memo(() => {
   const { t } = useTranslation();
   const colorRef = useArtworkColor(track?.artwork_url ?? null);
 
+  const [isEditing, setIsEditing] = useState(false);
+  const [manualQuery, setManualQuery] = useState<{ artist: string; title: string } | null>(null);
+  const [editArtist, setEditArtist] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+
+  const reqArtist = manualQuery ? manualQuery.artist : (track?.user.username ?? '');
+  const reqTitle = manualQuery ? manualQuery.title : (track?.title ?? '');
+
   const { data: lyrics, isLoading } = useQuery({
-    queryKey: ['lyrics', track?.user.username, track?.title],
-    queryFn: () => searchLyrics(track!.user.username, track!.title),
+    queryKey: ['lyrics', track?.urn, reqArtist, reqTitle],
+    queryFn: () => searchLyrics(reqArtist, reqTitle),
     enabled: open && !!track,
     staleTime: Number.POSITIVE_INFINITY,
     retry: 1,
   });
+
+  useEffect(() => {
+    setManualQuery(null);
+    setIsEditing(false);
+  }, [track?.urn]);
 
   useEffect(() => {
     if (!open) return;
@@ -416,16 +448,63 @@ export const LyricsPanel = React.memo(() => {
         <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white/[0.04]" />
 
         {/* Right: lyrics */}
-        <div className="min-h-0 flex flex-col">
-          {isLoading ? (
+        <div className="min-h-0 flex flex-col relative">
+          
+          {!isEditing && (
+            <button
+              type="button"
+              onClick={() => {
+                const parsed = splitArtistTitle(track?.title ?? '');
+                setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
+                setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
+                setIsEditing(true);
+              }}
+              className="absolute right-12 top-3 z-20 w-8 h-8 flex items-center justify-center rounded-full text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors"
+              title={t('track.manualSearch', 'Manual Search')}
+            >
+              <Search size={14} />
+            </button>
+          )}
+
+          {isEditing ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 px-12 animate-fade-in-up">
+              <h3 className="text-white/80 font-bold mb-2">{t('track.manualSearch', 'Manual Search')}</h3>
+              <input 
+                value={editArtist} 
+                onChange={(e) => setEditArtist(e.target.value)}
+                placeholder="Artist"
+                className="w-full max-w-[280px] bg-white/10 px-4 py-2.5 rounded-xl text-white text-[14px] outline-none border border-transparent focus:border-white/20 placeholder:text-white/30"
+              />
+              <input 
+                value={editTitle} 
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="Title"
+                className="w-full max-w-[280px] bg-white/10 px-4 py-2.5 rounded-xl text-white text-[14px] outline-none border border-transparent focus:border-white/20 placeholder:text-white/30"
+              />
+              <div className="flex gap-3 mt-4">
+                <button type="button" onClick={() => setIsEditing(false)} className="px-5 py-2 rounded-full text-[13px] font-medium text-white/50 hover:text-white hover:bg-white/10 transition-colors">
+                  {t('eq.off', 'Cancel')}
+                </button>
+                <button type="button" onClick={() => { setManualQuery({ artist: editArtist, title: editTitle }); setIsEditing(false); }} className="px-6 py-2 rounded-full text-[13px] font-bold bg-white/20 hover:bg-white/30 text-white transition-colors">
+                  {t('track.search', 'Search')}
+                </button>
+              </div>
+            </div>
+          ) : isLoading ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-3">
               <Loader2 size={24} className="animate-spin text-white/15" />
               <p className="text-[13px] text-white/25">{t('track.lyricsLoading')}</p>
             </div>
           ) : lyrics?.synced ? (
-            <SyncedLyrics lines={lyrics.synced} />
+            <>
+              <LyricsSourceBadge source={lyrics.source} />
+              <SyncedLyrics lines={lyrics.synced} />
+            </>
           ) : lyrics?.plain ? (
-            <PlainLyrics text={lyrics.plain} />
+            <>
+              <LyricsSourceBadge source={lyrics.source} />
+              <PlainLyrics text={lyrics.plain} />
+            </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center gap-4 px-12 text-center">
               <MicVocal size={40} className="text-white/[0.06]" />
@@ -492,7 +571,7 @@ export const ArtworkPanel = React.memo(() => {
         <TrackColumn track={track} maxArt="max-w-[420px]" />
       </div>
 
-      <FloatingComments />
+      <FloatingComments side="right" />
     </div>
   );
 });

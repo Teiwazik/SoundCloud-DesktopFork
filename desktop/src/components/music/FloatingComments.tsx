@@ -20,18 +20,24 @@ function getMaxVisible(): number {
   return 4;
 }
 
-export const FloatingComments = React.memo(function FloatingComments() {
+export const FloatingComments = React.memo(function FloatingComments({
+  side = 'center',
+}: {
+  side?: 'center' | 'right';
+}) {
   const enabled = useSettingsStore((s) => s.floatingComments);
   const trackUrn = usePlayerStore((s) => s.currentTrack?.urn);
 
   if (!enabled || !trackUrn) return null;
-  return <FloatingCommentsInner trackUrn={trackUrn} />;
+  return <FloatingCommentsInner trackUrn={trackUrn} side={side} />;
 });
 
 const FloatingCommentsInner = React.memo(function FloatingCommentsInner({
   trackUrn,
+  side,
 }: {
   trackUrn: string;
+  side: 'center' | 'right';
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pillsRef = useRef<Pill[]>([]);
@@ -93,7 +99,11 @@ const FloatingCommentsInner = React.memo(function FloatingCommentsInner({
   return (
     <div
       ref={containerRef}
-      className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col-reverse gap-2 items-center pointer-events-none"
+      className={`absolute bottom-4 z-50 flex flex-col-reverse gap-2 pointer-events-none ${
+        side === 'right'
+          ? 'right-6 items-end'
+          : 'left-1/2 -translate-x-1/2 items-center'
+      }`}
     />
   );
 });

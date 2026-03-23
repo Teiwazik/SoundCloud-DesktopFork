@@ -89,12 +89,19 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
       const lerp = smoothing / 100;
 
       // Resample 64 → numBars with lerp smoothing
+      // Apply power-curve to tame bass dominance (lower bins are much louder raw)
       for (let i = 0; i < numBars; i++) {
         const src = (i / numBars) * 64;
         const lo = src | 0; // fast floor
         const hi = Math.min(lo + 1, 63);
         const f = src - lo;
-        const target = targetBins[lo] * (1 - f) + targetBins[hi] * f;
+        const raw = targetBins[lo] * (1 - f) + targetBins[hi] * f;
+        // Tame bass (lower indices) by applying a frequency-dependent weight
+        // e.g. lower bins get multiplied by ~0.4, higher bins approach 1.0
+        const freqWeight = 0.4 + 0.6 * (i / Math.max(1, numBars - 1));
+        const damped = raw * freqWeight;
+        // Exponential curve to boost the perceived quiet parts slightly
+        const target = Math.pow(damped / 255, 0.7) * 255;
         smoothBins[i] += (target - smoothBins[i]) * lerp;
       }
 
@@ -104,10 +111,13 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         const barW = w / numBars;
         const gap = Math.max(1, barW * 0.15);
         const aW = barW - gap;
+        // Use a fixed opacity per bar so left/right symmetry is preserved
         for (let i = 0; i < numBars; i++) {
           const v = smoothBins[i];
           const bh = (v / 255) * h;
-          ctx.fillStyle = `rgba(${r},${g},${b},${Math.max(0.08, v / 255)})`;
+          // Opacity based on energy but symmetric: use the normalised height
+          const alpha = Math.max(0.05, (v / 255) * 0.85);
+          ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
           ctx.beginPath();
           ctx.roundRect(i * barW, h - bh, aW, bh, [3, 3, 0, 0]);
           ctx.fill();

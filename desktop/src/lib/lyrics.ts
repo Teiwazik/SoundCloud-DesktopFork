@@ -1,4 +1,9 @@
-const LYRICS_API = 'https://lrclib.net/api';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+
+const LRCLIB_API = 'https://lrclib.net/api';
+const LYRICS_OVH_API = 'https://api.lyrics.ovh/v1';
+const NCM_API = 'https://ncm.nekohasegawa.com';
+const TEXTYL_API = 'https://api.textyl.co/api/lyrics';
 const TIMEOUT_MS = 10000;
 
 export interface LyricLine {
@@ -6,9 +11,12 @@ export interface LyricLine {
   text: string;
 }
 
+export type LyricsSource = 'lrclib' | 'netease' | 'musixmatch' | 'genius' | 'textyl';
+
 export interface LyricsResult {
   plain: string | null;
   synced: LyricLine[] | null;
+  source: LyricsSource;
 }
 
 /** Parse LRC format: [mm:ss.xx] text */
@@ -24,11 +32,11 @@ function parseLRC(lrc: string): LyricLine[] {
   return lines;
 }
 
-function toResult(entry: { plainLyrics?: string; syncedLyrics?: string }): LyricsResult | null {
+function toResultLrclib(entry: { plainLyrics?: string; syncedLyrics?: string }): LyricsResult | null {
   const plain = entry.plainLyrics || null;
   const synced = entry.syncedLyrics ? parseLRC(entry.syncedLyrics) : null;
   if (!plain && !synced) return null;
-  return { plain, synced };
+  return { plain, synced, source: 'lrclib' };
 }
 
 /** Remove feat/remix/brackets/special chars */
@@ -54,8 +62,7 @@ function alphaOnly(s: string): string {
 }
 
 /** Parse "Artist - Title" from a combined string */
-function splitArtistTitle(raw: string): [string, string] | null {
-  // Try various dash separators
+export function splitArtistTitle(raw: string): [string, string] | null {
   for (const sep of [' - ', ' – ', ' — ', ' // ']) {
     const idx = raw.indexOf(sep);
     if (idx > 0) {
@@ -67,21 +74,197 @@ function splitArtistTitle(raw: string): [string, string] | null {
   return null;
 }
 
-async function apiFetch(
+// ── LRCLib ────────────────────────────────────────────────────
+
+async function lrclibFetch(
   params: Record<string, string>,
   signal: AbortSignal,
 ): Promise<LyricsResult | null> {
   try {
-    const url = `${LYRICS_API}/search?${new URLSearchParams(params)}`;
+    const url = `${LRCLIB_API}/search?${new URLSearchParams(params)}`;
     const res = await fetch(url, { signal });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data?.length) return null;
-    return toResult(data[0]);
+    return toResultLrclib(data[0]);
   } catch {
     return null;
   }
 }
+
+async function searchLrclib(
+  artist: string,
+  title: string,
+  signal: AbortSignal,
+): Promise<LyricsResult | null> {
+  // 1. Exact
+  let r = await lrclibFetch({ artist_name: artist, track_name: title }, signal);
+  if (r) return r;
+  // 2. Cleaned
+  const ca = clean(artist);
+  const ct = clean(title);
+  r = await lrclibFetch({ artist_name: ca, track_name: ct }, signal);
+  if (r) return r;
+  // 3. Alpha-only
+  const aa = alphaOnly(ca);
+  const at = alphaOnly(ct);
+  if (aa !== ca || at !== ct) {
+    r = await lrclibFetch({ artist_name: aa, track_name: at }, signal);
+    if (r) return r;
+  }
+  // 4. Free-text q=
+  r = await lrclibFetch({ q: alphaOnly(`${artist} ${title}`) }, signal);
+  return r;
+}
+
+// ── NetEase Cloud Music ───────────────────────────────────────
+
+async function searchNetease(
+  artist: string,
+  title: string,
+  signal: AbortSignal,
+): Promise<LyricsResult | null> {
+  try {
+    const q = encodeURIComponent(`${clean(artist)} ${clean(title)}`);
+    const searchRes = await fetch(`${NCM_API}/search?keywords=${q}&type=1`, { signal });
+    if (!searchRes.ok) return null;
+    const searchData = await searchRes.json();
+    const id = searchData?.result?.songs?.[0]?.id;
+    if (!id) return null;
+
+    const lrcRes = await fetch(`${NCM_API}/lyric?id=${id}`, { signal });
+    if (!lrcRes.ok) return null;
+    const lrcData = await lrcRes.json();
+    
+    const syncedLrc = lrcData?.lrc?.lyric;
+    const tlyric = lrcData?.tlyric?.lyric; // Translated (optional fallback)
+    
+    if (syncedLrc && syncedLrc.length > 20) {
+      return { plain: null, synced: parseLRC(syncedLrc), source: 'netease' };
+    }
+    if (tlyric && tlyric.length > 20) {
+      return { plain: tlyric, synced: null, source: 'netease' };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── lyrics.ovh (Musixmatch backend) ──────────────────────────
+
+async function searchMusixmatch(
+  artist: string,
+  title: string,
+  signal: AbortSignal,
+): Promise<LyricsResult | null> {
+  try {
+    const url = `${LYRICS_OVH_API}/${encodeURIComponent(clean(artist))}/${encodeURIComponent(clean(title))}`;
+    const res = await fetch(url, { signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text: string | undefined = data?.lyrics;
+    if (!text || text.length < 20) return null;
+    // Filter out "We're working on ..." placeholder
+    if (/we.re working on|lyrics not available/i.test(text)) return null;
+    return { plain: text.trim(), synced: null, source: 'musixmatch' };
+  } catch {
+    return null;
+  }
+}
+
+// ── Direct Genius Scraper ────────────────────────────────────────
+
+async function searchGenius(
+  artist: string,
+  title: string,
+  _signal: AbortSignal,
+): Promise<LyricsResult | null> {
+  try {
+    const q = encodeURIComponent(`${clean(artist)} ${clean(title)}`);
+    const searchUrl = `https://genius.com/api/search/multi?per_page=5&q=${q}`;
+    
+    // Tauri Fetch ignores CORS
+    const searchRes = await tauriFetch(searchUrl, { method: 'GET' });
+    if (!searchRes.ok) return null;
+    
+    const searchData = await searchRes.json();
+    let hitUrl = null;
+    
+    // Find the first song hit
+    for (const section of searchData?.response?.sections || []) {
+      if (section.type === 'song') {
+        const hits = section.hits || [];
+        if (hits.length > 0) {
+          hitUrl = hits[0].result?.url;
+          break;
+        }
+      }
+    }
+    
+    if (!hitUrl) return null;
+
+    // Fetch HTML
+    const htmlRes = await tauriFetch(hitUrl, { method: 'GET' });
+    if (!htmlRes.ok) return null;
+    const html = await htmlRes.text();
+    
+    // Parse the HTML DOM for lyrics
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const containers = doc.querySelectorAll('[data-lyrics-container="true"]');
+    
+    if (!containers || containers.length === 0) return null;
+    
+    let plainLyrics = '';
+    containers.forEach((container) => {
+      // Replace <br> and <br/> with newline
+      container.innerHTML = container.innerHTML.replace(/<br\s*\/?>/gi, '\n');
+      plainLyrics += container.textContent + '\n';
+    });
+    
+    plainLyrics = plainLyrics.trim();
+    if (plainLyrics.length > 20) {
+      return { plain: plainLyrics, synced: null, source: 'genius' };
+    }
+    
+    return null;
+  } catch (err) {
+    console.warn('Genius Scrape error:', err);
+    return null;
+  }
+}
+
+// ── Textyl ───────────────────────────────────────────────────
+
+async function searchTextyl(
+  artist: string,
+  title: string,
+  signal: AbortSignal,
+): Promise<LyricsResult | null> {
+  try {
+    const q = encodeURIComponent(`${clean(artist)} ${clean(title)}`);
+    const url = `${TEXTYL_API}?q=${q}`;
+    const res = await fetch(url, { signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    // Textyl returns an array of objects for synced, or sometimes just objects with `seconds` and `lyrics`
+    if (Array.isArray(data) && data.length > 0) {
+      const lines: LyricLine[] = data.map((d: any) => ({
+        time: Number(d.seconds),
+        text: String(d.lyrics)
+      })).filter((l) => !isNaN(l.time) && l.text);
+      if (lines.length > 0) {
+        return { plain: null, synced: lines, source: 'textyl' };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Main export ───────────────────────────────────────────────
 
 export async function searchLyrics(
   scUsername: string,
@@ -92,52 +275,37 @@ export async function searchLyrics(
   const sig = controller.signal;
 
   try {
-    // 1. Parse "Artist - Title" from SC title (most reliable for reposts/random uploaders)
+    // Determine artist/title
+    // NOTE: scUsername/scTitle are now purely the manually provided ones or the fallback ones.
     const parsed = splitArtistTitle(scTitle);
-    if (parsed) {
-      const [parsedArtist, parsedTitle] = parsed;
-      // 1a. Exact parsed
-      let r = await apiFetch({ artist_name: parsedArtist, track_name: parsedTitle }, sig);
-      if (r) return r;
+    const artist = parsed ? parsed[0] : scUsername;
+    const title  = parsed ? parsed[1] : scTitle;
 
-      // 1b. Cleaned parsed
-      const ca = clean(parsedArtist);
-      const ct = clean(parsedTitle);
-      r = await apiFetch({ artist_name: ca, track_name: ct }, sig);
-      if (r) return r;
-
-      // 1c. Alpha-only parsed
-      const aa = alphaOnly(ca);
-      const at = alphaOnly(ct);
-      if (aa !== ca || at !== ct) {
-        r = await apiFetch({ artist_name: aa, track_name: at }, sig);
-        if (r) return r;
-      }
-    }
-
-    // 2. Try SC username + title (works when uploader IS the artist)
-    const cleanedTitle = clean(scTitle);
-    let r = await apiFetch({ artist_name: scUsername, track_name: cleanedTitle }, sig);
+    // 1. LRCLib — best source (has synced), try both parsed and fallback
+    let r = await searchLrclib(artist, title, sig);
     if (r) return r;
 
-    // 2b. SC username + alpha-only title
-    const alphaTitle = alphaOnly(cleanedTitle);
-    if (alphaTitle !== cleanedTitle) {
-      r = await apiFetch({ artist_name: scUsername, track_name: alphaTitle }, sig);
+    // If not from parsed, also try with scUsername as artist
+    if (parsed) {
+      r = await searchLrclib(scUsername, scTitle, sig);
       if (r) return r;
     }
 
-    // 3. Free-text search (q=) — last resort, catches everything
-    //    Combine parsed artist+title or just the full SC title
-    const query = parsed ? `${parsed[0]} ${parsed[1]}` : `${scUsername} ${cleanedTitle}`;
-    r = await apiFetch({ q: alphaOnly(query) }, sig);
+    // 2. NetEase Cloud Music (synced)
+    r = await searchNetease(artist, title, sig);
     if (r) return r;
 
-    // 4. If title had "Artist - Title", try q= with just the title part
-    if (parsed) {
-      r = await apiFetch({ q: alphaOnly(parsed[1]) }, sig);
-      if (r) return r;
-    }
+    // 3. Musixmatch (lyrics.ovh) — plain only
+    r = await searchMusixmatch(artist, title, sig);
+    if (r) return r;
+
+    // 4. Genius (some-random-api proxy) — plain only
+    r = await searchGenius(artist, title, sig);
+    if (r) return r;
+
+    // 5. Textyl (synced)
+    r = await searchTextyl(artist, title, sig);
+    if (r) return r;
 
     return null;
   } finally {
