@@ -12,7 +12,9 @@ import { ArtworkPanel, LyricsPanel } from '../music/LyricsPanel';
 import { QueuePanel } from '../music/QueuePanel';
 import { NowPlayingBar } from './NowPlayingBar';
 import { Sidebar } from './Sidebar';
+import { MobileNav } from './MobileNav';
 import { Titlebar } from './Titlebar';
+import { useIsMobile } from '../../lib/hooks/useIsMobile';
 
 /* ── Keybinding definitions ────────────────────────────────── */
 
@@ -325,19 +327,22 @@ export const AppShell = React.memo(() => {
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, queueOpen, kbOpen]);
 
+  const isMobile = useIsMobile();
+
   return (
     <div className="flex flex-col h-screen relative overflow-hidden">
       <CustomBackground />
       <AmbientGlow />
       <Titlebar />
       <div className="flex flex-1 min-h-0 relative z-0" style={{ isolation: 'isolate' }}>
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto overflow-x-hidden">
+        {!isMobile && <Sidebar />}
+        <main className={`flex-1 overflow-y-auto overflow-x-hidden ${isMobile ? 'pb-32' : ''}`}>
           <StableOutlet />
         </main>
       </div>
-      <div className="relative z-10">
+      <div className="fixed bottom-0 left-0 right-0 z-10 flex flex-col">
         <NowPlayingBar onQueueToggle={onQueueToggle} queueOpen={queueOpen} />
+        {isMobile && <MobileNav />}
       </div>
       <QueuePanel open={queueOpen} onClose={onQueueClose} />
       <LyricsPanel />

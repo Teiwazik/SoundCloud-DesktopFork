@@ -30,6 +30,7 @@ import { optimisticToggleLike } from '../../lib/likes';
 import { searchLyrics } from '../../lib/lyrics';
 import { useLyricsStore } from '../../stores/lyrics';
 import { usePlayerStore, type Track } from '../../stores/player';
+import { useIsMobile } from '../../lib/hooks/useIsMobile';
 import { useDislikesStore } from '../../stores/dislikes';
 import { useSettingsStore } from '../../stores/settings';
 import { useSoundWaveStore } from '../../stores/soundwave';
@@ -619,41 +620,63 @@ const DiscordLyricsSyncer = React.memo(() => {
 
 export const NowPlayingBar = React.memo(
   ({ onQueueToggle, queueOpen }: { onQueueToggle: () => void; queueOpen: boolean }) => {
+    const isMobile = useIsMobile();
+    const isPlaying = usePlayerStore((s) => s.isPlaying);
+    const togglePlay = usePlayerStore((s) => s.togglePlay);
+
     return (
-      <div className="shrink-0 relative group/trackinfo">
+      <div className={`shrink-0 relative group/trackinfo ${isMobile ? 'h-[72px]' : ''}`}>
         <DiscordLyricsSyncer />
         <BackgroundGlow />
         
-        {useSettingsStore((s) => s.visualizerPlaybar) && <PlaybarVisualizer />}
+        {useSettingsStore((s) => s.visualizerPlaybar) && !isMobile && <PlaybarVisualizer />}
 
-        {/* Isolated layer — repaints here won't cascade to blur background */}
         <div className="relative z-10" style={{ isolation: 'isolate' }}>
-          <ProgressSlider />
-          <div className="h-[76px] flex items-center px-5 gap-3 relative">
+          {!isMobile && <ProgressSlider />}
+          <div className={`${isMobile ? 'h-[72px]' : 'h-[76px]'} flex items-center px-5 gap-3 relative`}>
             {/* Left: track info */}
-            <TrackInfo />
+            <div className="flex-1 min-w-0">
+              <TrackInfo />
+            </div>
 
-            {/* Center: controls */}
-            <div className="flex-1 flex flex-col items-center gap-0.5">
-              <div className="flex items-center gap-0.5">
-                <ShuffleBtn />
-                <PrevBtn />
-                <PlayPauseBtn />
-                <NextBtn />
-                <RepeatBtn />
+            {!isMobile ? (
+              <>
+                {/* Center: controls */}
+                <div className="flex-1 flex flex-col items-center gap-0.5">
+                  <div className="flex items-center gap-0.5">
+                    <ShuffleBtn />
+                    <PrevBtn />
+                    <PlayPauseBtn />
+                    <NextBtn />
+                    <RepeatBtn />
+                  </div>
+                  <ProgressTime />
+                </div>
+
+                {/* Right: volume + queue */}
+                <div className="flex items-center gap-0.5 w-[250px] justify-end">
+                  <EqBtn />
+                  <LyricsBtn />
+                  <QueueBtn onClick={onQueueToggle} active={queueOpen} />
+                  <ControlVolumeBtn size="sm" />
+                  <VolumeSlider className="w-[100px]" />
+                  <VolumeLabel />
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    togglePlay();
+                  }}
+                  className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-black"
+                >
+                  {isPlaying ? pauseBlack20 : playBlack20}
+                </button>
               </div>
-              <ProgressTime />
-            </div>
-
-            {/* Right: volume + queue */}
-            <div className="flex items-center gap-0.5 w-[250px] justify-end">
-              <EqBtn />
-              <LyricsBtn />
-              <QueueBtn onClick={onQueueToggle} active={queueOpen} />
-              <ControlVolumeBtn size="sm" />
-              <VolumeSlider className="w-[100px]" />
-              <VolumeLabel />
-            </div>
+            )}
           </div>
         </div>
       </div>

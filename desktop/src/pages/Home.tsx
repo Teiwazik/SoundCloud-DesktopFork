@@ -105,7 +105,7 @@ function ShelfSkeleton({ count = 8 }: { count?: number }) {
 
 function FeedSkeleton({ count = 6 }: { count?: number }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-2.5">
+    <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-2.5">
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="glass-flat rounded-2xl p-3 flex items-center gap-3.5">
           <Skeleton className="w-[76px] h-[76px] shrink-0" rounded="lg" />
@@ -608,7 +608,7 @@ const FeedStream = React.memo(function FeedStream() {
       {isLoading ? (
         <FeedSkeleton />
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-2.5">
           {streamItems.map((item) => (
             <div key={item.origin.urn}>
               {item.type.includes('track') ? (
