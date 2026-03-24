@@ -5,16 +5,16 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { getCurrentTime, getDuration, handlePrev, seek } from '../../lib/audio';
 import { getWallpaperUrl } from '../../lib/cache';
 import { art } from '../../lib/formatters';
-import { useLyricsStore } from '../../stores/lyrics';
+import { useIsMobile } from '../../lib/hooks/useIsMobile';
+import { useArtworkStore, useLyricsStore } from '../../stores/lyrics';
 import { usePlayerStore } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
 import { ArtworkPanel, LyricsPanel } from '../music/LyricsPanel';
 import { QueuePanel } from '../music/QueuePanel';
+import { MobileNav } from './MobileNav';
 import { NowPlayingBar } from './NowPlayingBar';
 import { Sidebar } from './Sidebar';
-import { MobileNav } from './MobileNav';
 import { Titlebar } from './Titlebar';
-import { useIsMobile } from '../../lib/hooks/useIsMobile';
 
 /* ── Keybinding definitions ────────────────────────────────── */
 
@@ -234,6 +234,10 @@ export const AppShell = React.memo(() => {
   const onQueueClose = useCallback(() => setQueueOpen(false), []);
   const navigate = useNavigate();
 
+  const isLyricsOpen = useLyricsStore((s) => s.open);
+  const isArtworkOpen = useArtworkStore((s) => s.open);
+  const isFullscreen = isLyricsOpen || isArtworkOpen;
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const inInput = isInputEl(e.target);
@@ -334,9 +338,12 @@ export const AppShell = React.memo(() => {
       <CustomBackground />
       <AmbientGlow />
       <Titlebar />
-      <div className="flex flex-1 min-h-0 relative z-0" style={{ isolation: 'isolate' }}>
+      <div 
+        className={`flex flex-1 min-h-0 relative z-0 ${isMobile ? 'mb-[136px]' : 'mb-[96px]'}`}
+        style={{ isolation: 'isolate', display: isFullscreen ? 'none' : undefined }}
+      >
         {!isMobile && <Sidebar />}
-        <main className={`flex-1 overflow-y-auto overflow-x-hidden ${isMobile ? 'pb-32' : ''}`}>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden">
           <StableOutlet />
         </main>
       </div>

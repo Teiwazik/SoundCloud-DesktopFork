@@ -13,3 +13,13 @@ export const useLyricsStore = create<LyricsUIState>()((set) => ({
   openPanel: () => set({ open: true }),
   close: () => set({ open: false }),
 }));
+
+export interface ArtworkUIState {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}
+
+export const useArtworkStore = create<ArtworkUIState>()((set) => ({
+  open: false,
+  setOpen: (open) => set({ open }),
+}));

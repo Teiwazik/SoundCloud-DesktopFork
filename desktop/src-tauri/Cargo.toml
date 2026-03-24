@@ -1,6 +1,6 @@
 [package]
 name = "soundcloud-desktop"
-version = "5.12.9"
+version = "15.12.9"
 description = "Beautiful Soundcloud Desktop app"
 authors = ["zxcloli666"]
 edition = "2021"

@@ -1,10 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { LikeButton } from '../components/music/LikeButton';
-import { TrackCard } from '../components/music/TrackCard';
-import { SoundWaveHero } from '../components/music/SoundWaveHero';
 import { MixCard } from '../components/music/MixCard';
+import { SoundWaveHero } from '../components/music/SoundWaveHero';
+import { TrackCard } from '../components/music/TrackCard';
 import { HorizontalScroll } from '../components/ui/HorizontalScroll';
 import { Skeleton } from '../components/ui/Skeleton';
 import { preloadTrack } from '../lib/audio';
@@ -44,6 +44,37 @@ import type { Track } from '../stores/player';
 import { usePlayerStore } from '../stores/player';
 
 /* ── Helpers ──────────────────────────────────────────────── */
+
+function LazyRender({
+  children,
+  minHeight = 100,
+}: {
+  children: React.ReactNode;
+  minHeight?: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => setIsVisible(entry.isIntersecting), {
+      root: el.closest('main'),
+      rootMargin: '1200px 0px',
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      style={{ minHeight: isVisible ? undefined : minHeight, contentVisibility: 'auto' }}
+    >
+      {isVisible ? children : null}
+    </div>
+  );
+}
 
 function greetingKey() {
   const h = new Date().getHours();
@@ -405,12 +436,18 @@ const FallbackShelf = React.memo(function FallbackShelf() {
   );
 });
 
-const LikedShelf = React.memo(function LikedShelf() {
+const LikedShelf = React.memo(function LikedShelf({
+  likedTracks,
+  isLoading,
+}: {
+  likedTracks: Track[];
+  isLoading: boolean;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { tracks: likedTracks, isLoading } = useLikedTracks(50);
+  const displayTracks = useMemo(() => likedTracks.slice(0, 50), [likedTracks]);
 
-  if (!isLoading && likedTracks.length === 0) return null;
+  if (!isLoading && displayTracks.length === 0) return null;
 
   return (
     <section>
@@ -423,9 +460,9 @@ const LikedShelf = React.memo(function LikedShelf() {
         {isLoading ? (
           <ShelfSkeleton />
         ) : (
-          likedTracks.map((track) => (
+          displayTracks.map((track) => (
             <div key={track.urn} className="w-[180px] shrink-0">
-              <TrackCard track={track} queue={likedTracks} />
+              <TrackCard track={track} queue={displayTracks} />
             </div>
           ))
         )}
@@ -462,9 +499,13 @@ const FollowingShelf = React.memo(function FollowingShelf() {
   );
 });
 
-const MixShelf = React.memo(function MixShelf() {
-  const { tracks: likedTracks } = useLikedTracks(50);
-  const { data: pool, isLoading } = useRelatedPool(likedTracks);
+const MixShelf = React.memo(function MixShelf({
+  pool,
+  isLoading,
+}: {
+  pool: ReturnType<typeof useRelatedPool>['data'];
+  isLoading: boolean;
+}) {
   const recommendedTracks = useRecommendedTracks(pool, 6); // Just top 6 for mixes
 
   const mixColors = ['#ff5500', '#00ffcc', '#ff00ff', '#f0f000', '#0099ff', '#ff3300'];
@@ -501,10 +542,16 @@ const MixShelf = React.memo(function MixShelf() {
   );
 });
 
-const DiscoverSection = React.memo(function DiscoverSection() {
+const DiscoverSection = React.memo(function DiscoverSection({
+  likedTracks,
+  pool,
+  isLoading,
+}: {
+  likedTracks: Track[];
+  pool: ReturnType<typeof useRelatedPool>['data'];
+  isLoading: boolean;
+}) {
   const { t } = useTranslation();
-  const { tracks: likedTracks } = useLikedTracks(100);
-  const { data: pool, isLoading } = useRelatedPool(likedTracks);
 
   // ── Recommended ──
   const recommendedTracks = useRecommendedTracks(pool, 40);
@@ -513,7 +560,9 @@ const DiscoverSection = React.memo(function DiscoverSection() {
   const discoverData = useDiscoverData(pool, likedTracks);
   const [activeGenre, setActiveGenre] = useState<string | null>(null);
   const genres = useMemo(() => discoverData.map((d) => d.genre), [discoverData]);
-  const selectedGenre = (typeof activeGenre === 'string' && genres.includes(activeGenre) ? activeGenre : genres[0]) ?? undefined;
+  const selectedGenre =
+    (typeof activeGenre === 'string' && genres.includes(activeGenre) ? activeGenre : genres[0]) ??
+    undefined;
   const genreTracks = useMemo(
     () => discoverData.find((d) => d.genre === selectedGenre)?.tracks ?? [],
     [discoverData, selectedGenre],
@@ -610,13 +659,13 @@ const FeedStream = React.memo(function FeedStream() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-2.5">
           {streamItems.map((item) => (
-            <div key={item.origin.urn}>
+            <LazyRender key={item.origin.urn} minHeight={100}>
               {item.type.includes('track') ? (
                 <FeedTrackCard item={item} queue={feedTrackQueue} />
               ) : (
                 <FeedPlaylistCard item={item} />
               )}
-            </div>
+            </LazyRender>
           ))}
         </div>
       )}
@@ -642,8 +691,11 @@ export function Home() {
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
 
+  const { tracks: likedTracks, isLoading: isLikesLoading } = useLikedTracks(100);
+  const { data: pool, isLoading: isPoolLoading } = useRelatedPool(likedTracks);
+
   return (
-    <div className="p-6 pb-20 space-y-12">
+    <div className="p-6 pb-6 space-y-12">
       {/* Hero Greeting */}
       <section className="pt-2">
         <h1 className="text-4xl font-bold tracking-tight greeting-gradient leading-[1.15] animate-fade-in-up">
@@ -654,11 +706,11 @@ export function Home() {
       </section>
 
       <SoundWaveHero />
-      <MixShelf />
+      <MixShelf pool={pool} isLoading={isPoolLoading} />
       <FallbackShelf />
-      <LikedShelf />
+      <LikedShelf likedTracks={likedTracks} isLoading={isLikesLoading} />
       <FollowingShelf />
-      <DiscoverSection />
+      <DiscoverSection likedTracks={likedTracks} pool={pool} isLoading={isPoolLoading} />
       <FeedStream />
     </div>
   );

@@ -8,6 +8,7 @@ import { art } from '../../lib/formatters';
 import { invalidateAllLikesCache } from '../../lib/hooks';
 import {
   Ban,
+  ExternalLink,
   Heart,
   ListPlus,
   Loader2,
@@ -16,24 +17,23 @@ import {
   playBlack18,
   repeat1Icon16,
   repeatIcon16,
+  Search,
   SkipBack,
   SkipForward,
   shuffleIcon16,
-  X,
-  Search,
-  ExternalLink,
-  volumeXIcon16,
   volume1Icon16,
   volume2Icon16,
+  volumeXIcon16,
+  X,
 } from '../../lib/icons';
 import { optimisticToggleLike, useLiked } from '../../lib/likes';
 import type { LyricLine, LyricsSource } from '../../lib/lyrics';
 import { searchLyrics, splitArtistTitle } from '../../lib/lyrics';
-import { useLyricsStore } from '../../stores/lyrics';
 import { useDislikesStore } from '../../stores/dislikes';
-import { useSoundWaveStore } from '../../stores/soundwave';
+import { useArtworkStore, useLyricsStore } from '../../stores/lyrics';
 import { type Track, usePlayerStore } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
+import { useSoundWaveStore } from '../../stores/soundwave';
 import { ProgressSlider, ProgressTime } from '../layout/NowPlayingBar';
 import { AddToPlaylistDialog } from './AddToPlaylistDialog';
 import { FloatingComments } from './FloatingComments';
@@ -49,23 +49,24 @@ const SOURCE_LABELS: Record<LyricsSource, string> = {
   textyl: 'Textyl',
 };
 
-const LyricsSourceBadge = React.memo(({ source, onSearch }: { source: LyricsSource; onSearch?: () => void }) => (
-  <div className="flex items-center justify-between px-12 pt-3 pb-0">
-    <span className="text-[10px] font-semibold text-white/20 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">
-      {SOURCE_LABELS[source]}
-    </span>
-    {onSearch && (
-      <button
-        type="button"
-        onClick={onSearch}
-        className="w-8 h-8 flex items-center justify-center rounded-full text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors"
-      >
-        <Search size={14} />
-      </button>
-    )}
-  </div>
-));
-
+const LyricsSourceBadge = React.memo(
+  ({ source, onSearch }: { source: LyricsSource; onSearch?: () => void }) => (
+    <div className="flex items-center justify-between px-12 pt-3 pb-0">
+      <span className="text-[10px] font-semibold text-white/20 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">
+        {SOURCE_LABELS[source]}
+      </span>
+      {onSearch && (
+        <button
+          type="button"
+          onClick={onSearch}
+          className="w-8 h-8 flex items-center justify-center rounded-full text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors"
+        >
+          <Search size={14} />
+        </button>
+      )}
+    </div>
+  ),
+);
 
 /* ── Color extraction ─────────────────────────────────────── */
 
@@ -139,7 +140,7 @@ const FullscreenVisualizer = React.memo(() => {
   const op = useSettingsStore((s) => s.visualizerOpacity);
   const fade = useSettingsStore((s) => s.visualizerFade);
   const sc = useSettingsStore((s) => s.visualizerScale) / 100;
-  
+
   return (
     <div
       className="absolute bottom-0 left-0 right-0 z-[1] pointer-events-none mix-blend-screen"
@@ -230,7 +231,7 @@ const FullscreenVolumeSlider = React.memo(() => {
   const volume = usePlayerStore((s) => s.volume);
   const volumeBeforeMute = usePlayerStore((s) => s.volumeBeforeMute);
   const setVolume = usePlayerStore((s) => s.setVolume);
-  
+
   return (
     <div className="flex items-center gap-3 w-full max-w-[280px] mt-2 group/vol">
       <button
@@ -321,9 +322,9 @@ const Controls = React.memo(({ track }: { track: Track }) => {
         {repeat === 'one' ? repeat1Icon16 : repeatIcon16}
       </button>
       <FullscreenDislikeButton track={track} />
-      <button 
-        type="button" 
-        className={ctrl} 
+      <button
+        type="button"
+        className={ctrl}
         onClick={() => window.open(track.permalink_url, '_blank')}
         title="Open in SoundCloud"
       >
@@ -337,14 +338,34 @@ const Controls = React.memo(({ track }: { track: Track }) => {
 
 const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: string }) => {
   const artwork500 = art(track.artwork_url, 't500x500');
+  const artwork200 = art(track.artwork_url, 't200x200');
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+  }, [artwork500]);
 
   return (
     <div className="flex flex-col items-center justify-center gap-5 px-12">
       <div
-        className={`w-full ${maxArt ?? 'max-w-[360px]'} aspect-square rounded-2xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-white/[0.08]`}
+        className={`w-full ${maxArt ?? 'max-w-[360px]'} aspect-square rounded-2xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-white/[0.08] relative`}
       >
         {artwork500 ? (
-          <img src={artwork500} alt="" className="w-full h-full object-cover" />
+          <>
+            {/* Blurry low-res placeholder */}
+            <img
+              src={artwork200 || artwork500}
+              alt=""
+              className={`absolute inset-0 w-full h-full object-cover blur-2xl scale-110 transition-opacity duration-700 ease-[var(--ease-apple)] ${loaded ? 'opacity-0' : 'opacity-100'}`}
+            />
+            {/* High-res image */}
+            <img
+              src={artwork500}
+              alt=""
+              onLoad={() => setLoaded(true)}
+              className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-[var(--ease-apple)] ${loaded ? 'opacity-100' : 'opacity-0'}`}
+            />
+          </>
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-white/[0.06] to-white/[0.02] flex items-center justify-center">
             <MicVocal size={48} className="text-white/10" />
@@ -365,7 +386,7 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
       </div>
 
       <Controls track={track} />
-      
+
       <FullscreenVolumeSlider />
     </div>
   );
@@ -451,17 +472,14 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
   }, [lines]);
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 overflow-y-auto scrollbar-hide px-12 py-16 relative"
-    >
+    <div ref={containerRef} className="flex-1 overflow-y-auto scrollbar-hide px-12 py-16 relative">
       <div className="flex flex-col gap-2">
         {lines.map((line, i) => (
-          <div 
-             key={`${line.time}-${i}`} 
-             className="lyric-line cursor-pointer origin-left transition-all duration-500 ease-[var(--ease-apple)] will-change-transform py-2.5 data-[state=active]:text-white data-[state=active]:scale-[1.03] data-[state=active]:opacity-100 data-[state=past]:text-white/20 data-[state=past]:scale-[0.97] text-[28px] font-bold tracking-tight text-white/40 scale-[0.97] pr-12 hover:text-white/60 antialiased" 
-             style={{ textRendering: 'optimizeLegibility' }}
-             onClick={() => seek(line.time)}
+          <div
+            key={`${line.time}-${i}`}
+            className="lyric-line cursor-pointer origin-left transition-all duration-500 ease-[var(--ease-apple)] will-change-transform py-2.5 data-[state=active]:text-white data-[state=active]:scale-[1.03] data-[state=active]:opacity-100 data-[state=past]:text-white/20 data-[state=past]:scale-[0.97] text-[28px] font-bold tracking-tight text-white/40 scale-[0.97] pr-12 hover:text-white/60 antialiased"
+            style={{ textRendering: 'optimizeLegibility' }}
+            onClick={() => seek(line.time)}
           >
             {line.text}
           </div>
@@ -557,24 +575,37 @@ export const LyricsPanel = React.memo(() => {
         <div className="min-h-0 flex flex-col relative">
           {isEditing ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-4 px-12 animate-fade-in-up">
-              <h3 className="text-white/80 font-bold mb-2">{t('track.manualSearch', 'Manual Search')}</h3>
-              <input 
-                value={editArtist} 
+              <h3 className="text-white/80 font-bold mb-2">
+                {t('track.manualSearch', 'Manual Search')}
+              </h3>
+              <input
+                value={editArtist}
                 onChange={(e) => setEditArtist(e.target.value)}
                 placeholder="Artist"
                 className="w-full max-w-[280px] bg-white/10 px-4 py-2.5 rounded-xl text-white text-[14px] outline-none border border-transparent focus:border-white/20 placeholder:text-white/30"
               />
-              <input 
-                value={editTitle} 
+              <input
+                value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
                 placeholder="Title"
                 className="w-full max-w-[280px] bg-white/10 px-4 py-2.5 rounded-xl text-white text-[14px] outline-none border border-transparent focus:border-white/20 placeholder:text-white/30"
               />
               <div className="flex gap-3 mt-4">
-                <button type="button" onClick={() => setIsEditing(false)} className="px-5 py-2 rounded-full text-[13px] font-medium text-white/50 hover:text-white hover:bg-white/10 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(false)}
+                  className="px-5 py-2 rounded-full text-[13px] font-medium text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                >
                   {t('eq.off', 'Cancel')}
                 </button>
-                <button type="button" onClick={() => { setManualQuery({ artist: editArtist, title: editTitle }); setIsEditing(false); }} className="px-6 py-2 rounded-full text-[13px] font-bold bg-white/20 hover:bg-white/30 text-white transition-colors">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManualQuery({ artist: editArtist, title: editTitle });
+                    setIsEditing(false);
+                  }}
+                  className="px-6 py-2 rounded-full text-[13px] font-bold bg-white/20 hover:bg-white/30 text-white transition-colors"
+                >
                   {t('track.search', 'Search')}
                 </button>
               </div>
@@ -586,22 +617,32 @@ export const LyricsPanel = React.memo(() => {
             </div>
           ) : lyrics?.synced ? (
             <>
-              <LyricsSourceBadge source={lyrics.source} onSearch={() => {
-                const parsed = splitArtistTitle(track?.title ?? '');
-                setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
-                setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
-                setIsEditing(true);
-              }} />
+              <LyricsSourceBadge
+                source={lyrics.source}
+                onSearch={() => {
+                  const parsed = splitArtistTitle(track?.title ?? '');
+                  setEditArtist(
+                    manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''),
+                  );
+                  setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
+                  setIsEditing(true);
+                }}
+              />
               <SyncedLyrics lines={lyrics.synced} />
             </>
           ) : lyrics?.plain ? (
             <>
-              <LyricsSourceBadge source={lyrics.source} onSearch={() => {
-                const parsed = splitArtistTitle(track?.title ?? '');
-                setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
-                setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
-                setIsEditing(true);
-              }} />
+              <LyricsSourceBadge
+                source={lyrics.source}
+                onSearch={() => {
+                  const parsed = splitArtistTitle(track?.title ?? '');
+                  setEditArtist(
+                    manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''),
+                  );
+                  setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
+                  setIsEditing(true);
+                }}
+              />
               <PlainLyrics text={lyrics.plain} />
             </>
           ) : (
@@ -610,7 +651,9 @@ export const LyricsPanel = React.memo(() => {
                 type="button"
                 onClick={() => {
                   const parsed = splitArtistTitle(track?.title ?? '');
-                  setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
+                  setEditArtist(
+                    manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''),
+                  );
                   setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
                   setIsEditing(true);
                 }}
@@ -636,7 +679,8 @@ export const LyricsPanel = React.memo(() => {
 /* ── Artwork Fullscreen Panel ─────────────────────────────── */
 
 export const ArtworkPanel = React.memo(() => {
-  const [open, setOpen] = useState(false);
+  const open = useArtworkStore((s) => s.open);
+  const setOpen = useArtworkStore((s) => s.setOpen);
   const track = usePlayerStore((s) => s.currentTrack);
   const colorRef = useArtworkColor(track?.artwork_url ?? null);
 
@@ -651,8 +695,8 @@ export const ArtworkPanel = React.memo(() => {
 
   // Expose open/close
   useEffect(() => {
-    artworkPanelApi.open = () => setOpen(true);
-    artworkPanelApi.close = () => setOpen(false);
+    artworkPanelApi.open = () => useArtworkStore.getState().setOpen(true);
+    artworkPanelApi.close = () => useArtworkStore.getState().setOpen(false);
   }, []);
 
   if (!open || !track) return null;
