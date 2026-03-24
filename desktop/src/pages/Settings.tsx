@@ -616,6 +616,109 @@ const AudioDeviceSection = React.memo(function AudioDeviceSection() {
       </div>
     </section>
   );
+
+});
+
+/* ── SoundWave Section ────────────────────────────────── */
+
+const SoundWaveSection = React.memo(function SoundWaveSection() {
+  const { t } = useTranslation();
+  const qdrantEnabled = useSettingsStore((s) => s.qdrantEnabled);
+  const qdrantUrl = useSettingsStore((s) => s.qdrantUrl);
+  const qdrantKey = useSettingsStore((s) => s.qdrantKey);
+  const qdrantCollection = useSettingsStore((s) => s.qdrantCollection);
+  
+  const setQdrantEnabled = useSettingsStore((s) => s.setQdrantEnabled);
+  const setQdrantUrl = useSettingsStore((s) => s.setQdrantUrl);
+  const setQdrantKey = useSettingsStore((s) => s.setQdrantKey);
+  const setQdrantCollection = useSettingsStore((s) => s.setQdrantCollection);
+
+  const [open, setOpen] = useState(false);
+
+  return (
+    <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl shadow-xl overflow-hidden mt-6">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-6 py-5 hover:bg-white/[0.02] transition-colors cursor-pointer"
+      >
+        <div className="flex items-center gap-3">
+           <h3 className="text-[15px] font-bold text-white/80 tracking-tight">SoundWave (Pro)</h3>
+           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent/20 text-accent uppercase tracking-widest">Qdrant</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${qdrantEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}>
+            {qdrantEnabled ? t('eq.on', 'On') : t('eq.off', 'Off')}
+          </span>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className={`text-white/30 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}>
+            <path d="M3 5l4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-6 pb-6 space-y-5 border-t border-white/[0.05] pt-4 animate-fade-in-up">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <p className="text-[13px] text-white/70 font-medium">{t('settings.qdrantEnabled', 'Enable Recommendation Engine')}</p>
+              <p className="text-[11px] text-white/30">{t('settings.qdrantEnabledDesc', 'Use Qdrant for 72D vector search and mood analysis')}</p>
+            </div>
+            <button
+              onClick={() => setQdrantEnabled(!qdrantEnabled)}
+              className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
+                qdrantEnabled ? 'bg-accent' : 'bg-white/10'
+              }`}
+            >
+              <div
+                className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
+                  qdrantEnabled ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className={`space-y-4 transition-opacity duration-300 ${!qdrantEnabled ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+            <div className="space-y-1.5">
+              <label className="text-[12px] text-white/40 font-medium ml-1">Qdrant URL</label>
+              <input
+                type="text"
+                value={qdrantUrl}
+                onChange={(e) => setQdrantUrl(e.target.value)}
+                placeholder="https://xxx-yyy.us-east4-0.gcp.cloud.qdrant.io:6333"
+                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[12px] text-white/40 font-medium ml-1">API Key</label>
+              <input
+                type="password"
+                value={qdrantKey}
+                onChange={(e) => setQdrantKey(e.target.value)}
+                placeholder="Your Qdrant API Key"
+                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[12px] text-white/40 font-medium ml-1">Collection Name</label>
+              <input
+                type="text"
+                value={qdrantCollection}
+                onChange={(e) => setQdrantCollection(e.target.value)}
+                placeholder="sw_v1"
+                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
+              />
+            </div>
+            
+            <p className="text-[11px] text-white/20 italic leading-relaxed">
+               {t('settings.qdrantNote', 'Note: You need a Qdrant Cloud cluster. Your tracks will be vectorized and indexed localy then synced to Qdrant.')}
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 });
 
 /* ── Playback Section ─────────────────────────────────── */
@@ -1150,6 +1253,7 @@ export function Settings() {
       <CacheSection />
       <ThemeSection />
       <VisualizerSection />
+      <SoundWaveSection />
       <PlaybackSection />
       <EqualizerSection />
       <AudioDeviceSection />

@@ -7,6 +7,8 @@ import { api, getSessionId } from './api';
 import { fetchAndCacheTrack, getCacheFilePath, isCached } from './cache';
 import { API_BASE } from './constants';
 import { art } from './formatters';
+import { audioAnalyser } from './audio-analyser';
+import { useSoundWaveStore } from '../stores/soundwave';
 
 /* ── Audio engine state ──────────────────────────────────────── */
 
@@ -18,6 +20,7 @@ let cachedDuration = 0;
 let loadGen = 0;
 let lastTickAt = 0;
 let isCrossfadingOut = false;
+let crossfadeInProgress = false;
 // @ts-expect-error — used for stall detection interval
 let stallCheckTimer: ReturnType<typeof setInterval> | null = null; // eslint-disable-line
 const listeners = new Set<() => void>();
@@ -83,9 +86,9 @@ export async function reloadCurrentTrack() {
   if (!wasPlaying) invoke('audio_pause').catch(console.error);
 }
 
-async function loadTrack(track: Track) {
+async function loadTrack(track: Track, skipStop = false) {
   const gen = ++loadGen;
-  stopTrack();
+  if (!skipStop) stopTrack();
   currentUrn = track.urn;
   const urn = track.urn;
 
@@ -174,6 +177,12 @@ async function loadTrack(track: Track) {
 
 function handleTrackEnd() {
   const state = usePlayerStore.getState();
+  const sw = useSoundWaveStore.getState();
+
+  if (sw.isActive && state.currentTrack) {
+    sw.recordFeedback(state.currentTrack, 'positive');
+  }
+
   if (state.repeat === 'one') {
     // rodio sink is empty after track ends — must reload
     if (state.currentTrack) void loadTrack(state.currentTrack);
@@ -203,6 +212,7 @@ listen<number>('audio:tick', (event) => {
     const remaining = cachedDuration - cachedTime;
     if (remaining <= settings.crossfadeDuration && remaining > 0 && !isCrossfadingOut) {
       isCrossfadingOut = true;
+      crossfadeInProgress = true;
       handleTrackEnd();
     }
   }
@@ -274,8 +284,12 @@ usePlayerStore.subscribe((state, prev) => {
   if (trackChanged) {
     if (state.currentTrack) {
       updateMetadata(state.currentTrack);
-      void loadTrack(state.currentTrack);
+      audioAnalyser.setTrack(state.currentTrack.urn);
+      const shouldSkipStop = crossfadeInProgress;
+      crossfadeInProgress = false;
+      void loadTrack(state.currentTrack, shouldSkipStop);
     } else {
+      audioAnalyser.setTrack(null);
       stopTrack();
       currentUrn = null;
       fallbackDuration = 0;

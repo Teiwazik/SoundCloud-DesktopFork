@@ -169,7 +169,10 @@
     "hardwareAcceleration": "Hardware Acceleration",
     "import": "Import",
     "importYandex": "Import from Yandex Music",
-    "requiresRestart": "Requires app restart"
+    "requiresRestart": "Requires app restart",
+    "qdrantEnabled": "Enable Recommendation Engine",
+    "qdrantEnabledDesc": "Use Qdrant for 72D vector search and mood analysis",
+    "qdrantNote": "Note: You need a Qdrant Cloud cluster. Your tracks will be vectorized and indexed locally then synced to Qdrant."
   },
   "eq": {
     "title": "Equalizer",

@@ -64,6 +64,11 @@ export interface SettingsState {
   crossfadeEnabled: boolean;
   crossfadeDuration: number;
   floatingComments: boolean;
+  discordRpc: boolean;
+  qdrantEnabled: boolean;
+  qdrantUrl: string;
+  qdrantKey: string;
+  qdrantCollection: string;
   visualizerStyle: 'Off' | 'Bars' | 'Wave' | 'Pulse';
   visualizerPlaybar: boolean;
   visualizerFullscreen: boolean;
@@ -101,6 +106,11 @@ export interface SettingsState {
   setCrossfadeDuration: (v: number) => void;
   toggleSidebar: () => void;
   setFloatingComments: (v: boolean) => void;
+  setDiscordRpc: (v: boolean) => void;
+  setQdrantEnabled: (v: boolean) => void;
+  setQdrantUrl: (v: string) => void;
+  setQdrantKey: (v: string) => void;
+  setQdrantCollection: (v: string) => void;
   setVisualizerStyle: (style: 'Off' | 'Bars' | 'Wave' | 'Pulse') => void;
   setVisualizerPlaybar: (v: boolean) => void;
   setVisualizerFullscreen: (v: boolean) => void;
@@ -143,6 +153,11 @@ const DEFAULTS = {
   crossfadeDuration: 6,
   sidebarCollapsed: false,
   floatingComments: true,
+  discordRpc: true,
+  qdrantEnabled: true,
+  qdrantUrl: 'https://ad939139-4819-4d3a-b2a1-1147a03f59ac.sa-east-1-0.aws.cloud.qdrant.io:6333',
+  qdrantKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.gvSVVDlSD2k59lCoi-Jk6lT-QEO_4XmpUBbzx3Dt4S8',
+  qdrantCollection: 'sw_v1',
   visualizerStyle: 'Wave' as const,
   visualizerPlaybar: true,
   visualizerFullscreen: false,
@@ -206,6 +221,11 @@ export const useSettingsStore = create<SettingsState>()(
       setCrossfadeDuration: (crossfadeDuration) => set({ crossfadeDuration }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setFloatingComments: (floatingComments) => set({ floatingComments }),
+      setDiscordRpc: (discordRpc) => set({ discordRpc }),
+      setQdrantEnabled: (qdrantEnabled) => set({ qdrantEnabled }),
+      setQdrantUrl: (qdrantUrl) => set({ qdrantUrl }),
+      setQdrantKey: (qdrantKey) => set({ qdrantKey }),
+      setQdrantCollection: (qdrantCollection) => set({ qdrantCollection }),
       setVisualizerStyle: (visualizerStyle) => set({ visualizerStyle }),
       setVisualizerPlaybar: (visualizerPlaybar) => set({ visualizerPlaybar }),
       setVisualizerFullscreen: (visualizerFullscreen) => set({ visualizerFullscreen }),
@@ -253,6 +273,11 @@ export const useSettingsStore = create<SettingsState>()(
         youtubeClientSecret: s.youtubeClientSecret,
         sidebarCollapsed: s.sidebarCollapsed,
         floatingComments: s.floatingComments,
+        discordRpc: s.discordRpc,
+        qdrantEnabled: s.qdrantEnabled,
+        qdrantUrl: s.qdrantUrl,
+        qdrantKey: s.qdrantKey,
+        qdrantCollection: s.qdrantCollection,
         targetFramerate: s.targetFramerate,
         unlockFramerate: s.unlockFramerate,
         showFpsCounter: s.showFpsCounter,

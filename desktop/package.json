@@ -1,7 +1,7 @@
 {
   "name": "soundcloud-desktop",
   "private": true,
-  "version": "5.12.1",
+  "version": "5.12.7",
   "type": "module",
   "scripts": {
     "dev": "vite",

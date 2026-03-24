@@ -32,6 +32,7 @@ import { useLyricsStore } from '../../stores/lyrics';
 import { usePlayerStore, type Track } from '../../stores/player';
 import { useDislikesStore } from '../../stores/dislikes';
 import { useSettingsStore } from '../../stores/settings';
+import { useSoundWaveStore } from '../../stores/soundwave';
 import { EqualizerPanel } from '../music/EqualizerPanel';
 import { Visualizer } from '../music/Visualizer';
 
@@ -355,7 +356,14 @@ function DislikeButton({ trackUrn }: { trackUrn: string }) {
 
   const handleToggle = () => {
     toggle(trackUrn);
-    if (!isDisliked) next();
+    if (!isDisliked) {
+      const sw = useSoundWaveStore.getState();
+      const currentTrack = usePlayerStore.getState().currentTrack;
+      if (sw.isActive && currentTrack && currentTrack.urn === trackUrn) {
+        sw.recordFeedback(currentTrack, 'negative');
+      }
+      next();
+    }
   };
 
   return (

@@ -1,3 +1,4 @@
+import * as Slider from '@radix-ui/react-slider';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -6,6 +7,7 @@ import { getCurrentTime, handlePrev, seek } from '../../lib/audio';
 import { art } from '../../lib/formatters';
 import { invalidateAllLikesCache } from '../../lib/hooks';
 import {
+  Ban,
   Heart,
   ListPlus,
   Loader2,
@@ -19,11 +21,17 @@ import {
   shuffleIcon16,
   X,
   Search,
+  ExternalLink,
+  volumeXIcon16,
+  volume1Icon16,
+  volume2Icon16,
 } from '../../lib/icons';
 import { optimisticToggleLike, useLiked } from '../../lib/likes';
 import type { LyricLine, LyricsSource } from '../../lib/lyrics';
 import { searchLyrics, splitArtistTitle } from '../../lib/lyrics';
 import { useLyricsStore } from '../../stores/lyrics';
+import { useDislikesStore } from '../../stores/dislikes';
+import { useSoundWaveStore } from '../../stores/soundwave';
 import { type Track, usePlayerStore } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
 import { ProgressSlider, ProgressTime } from '../layout/NowPlayingBar';
@@ -31,7 +39,7 @@ import { AddToPlaylistDialog } from './AddToPlaylistDialog';
 import { FloatingComments } from './FloatingComments';
 import { Visualizer } from './Visualizer';
 
-/* ── Source Badge ──────────────────────────────────────── */
+/* ── Source Badge ─────────────────────────────────────────── */
 
 const SOURCE_LABELS: Record<LyricsSource, string> = {
   lrclib: 'LRCLib',
@@ -41,15 +49,25 @@ const SOURCE_LABELS: Record<LyricsSource, string> = {
   textyl: 'Textyl',
 };
 
-const LyricsSourceBadge = React.memo(({ source }: { source: LyricsSource }) => (
-  <div className="flex justify-end px-12 pt-3 pb-0">
+const LyricsSourceBadge = React.memo(({ source, onSearch }: { source: LyricsSource; onSearch?: () => void }) => (
+  <div className="flex items-center justify-between px-12 pt-3 pb-0">
     <span className="text-[10px] font-semibold text-white/20 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">
       {SOURCE_LABELS[source]}
     </span>
+    {onSearch && (
+      <button
+        type="button"
+        onClick={onSearch}
+        className="w-8 h-8 flex items-center justify-center rounded-full text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors"
+      >
+        <Search size={14} />
+      </button>
+    )}
   </div>
 ));
 
-/* ── Color extraction ──────────────────────────────────────── */
+
+/* ── Color extraction ─────────────────────────────────────── */
 
 function extractColor(src: string): Promise<[number, number, number]> {
   return new Promise((resolve) => {
@@ -114,7 +132,7 @@ const FullscreenBackground = React.memo(
   },
 );
 
-/* ── Fullscreen Visualizer ──────────────────────────────────────── */
+/* ── Fullscreen Visualizer ────────────────────────────────── */
 
 const FullscreenVisualizer = React.memo(() => {
   const w = useSettingsStore((s) => s.visualizerWidth);
@@ -165,12 +183,85 @@ const FullscreenLikeButton = React.memo(({ track }: { track: Track }) => {
     <button
       type="button"
       onClick={toggle}
-      className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer hover:bg-white/[0.06] ${
+      className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer hover:bg-white/[0.06] outline-none ${
         liked ? 'text-accent' : 'text-white/30 hover:text-white/60'
       }`}
     >
       <Heart size={20} fill={liked ? 'currentColor' : 'none'} />
     </button>
+  );
+});
+
+/* ── Shared: dislike button (for fullscreen panels) ────────── */
+
+const FullscreenDislikeButton = React.memo(({ track }: { track: Track }) => {
+  const trackUrn = track.urn;
+  const isDisliked = useDislikesStore((s) => s.dislikedTrackUrns.includes(trackUrn));
+  const toggle = useDislikesStore((s) => s.toggleDislike);
+  const next = usePlayerStore((s) => s.next);
+
+  const handleToggle = () => {
+    toggle(trackUrn);
+    if (!isDisliked) {
+      const sw = useSoundWaveStore.getState();
+      if (sw.isActive) {
+        sw.recordFeedback(track, 'negative');
+      }
+      next();
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleToggle}
+      className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer hover:bg-white/[0.06] outline-none ${
+        isDisliked ? 'text-red-500' : 'text-white/30 hover:text-white/60'
+      }`}
+    >
+      <Ban size={18} />
+    </button>
+  );
+});
+
+/* ── Shared: volume slider (for fullscreen panels) ─────────── */
+
+const FullscreenVolumeSlider = React.memo(() => {
+  const volume = usePlayerStore((s) => s.volume);
+  const volumeBeforeMute = usePlayerStore((s) => s.volumeBeforeMute);
+  const setVolume = usePlayerStore((s) => s.setVolume);
+  
+  return (
+    <div className="flex items-center gap-3 w-full max-w-[280px] mt-2 group/vol">
+      <button
+        type="button"
+        onClick={() => setVolume(volume > 0 ? 0 : volumeBeforeMute)}
+        className="w-8 h-8 rounded-full flex items-center justify-center text-white/30 hover:text-white/60 hover:bg-white/5 transition-all outline-none"
+      >
+        {volume === 0 ? volumeXIcon16 : volume < 50 ? volume1Icon16 : volume2Icon16}
+      </button>
+      <div className="flex-1 relative flex items-center h-5">
+        <Slider.Root
+          className="relative flex items-center h-full w-full cursor-pointer select-none touch-none"
+          value={[volume]}
+          max={200}
+          step={1}
+          onValueChange={([v]) => setVolume(v)}
+        >
+          <Slider.Track className="relative h-[3px] grow rounded-full bg-white/[0.08] group-hover/vol:h-[4px] transition-all duration-150">
+            <Slider.Range
+              className={`absolute h-full rounded-full ${volume > 100 ? 'bg-amber-400/80' : 'bg-white/40'}`}
+            />
+          </Slider.Track>
+          <Slider.Thumb
+            className={`block w-2.5 h-2.5 rounded-full transition-all duration-150 outline-none scale-0 opacity-0 group-hover/vol:scale-100 group-hover/vol:opacity-100 ${volume > 100 ? 'bg-amber-400' : 'bg-white'}`}
+          />
+        </Slider.Root>
+      </div>
+      <span className="text-[10px] text-white/20 tabular-nums w-8 text-right font-medium">
+        {volume}%
+      </span>
+    </div>
   );
 });
 
@@ -186,17 +277,20 @@ const Controls = React.memo(({ track }: { track: Track }) => {
   const toggleRepeat = usePlayerStore((s) => s.toggleRepeat);
 
   const ctrl =
-    'w-10 h-10 rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer hover:bg-white/[0.06]';
-  const small =
-    'w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer hover:bg-white/[0.06]';
+    'w-11 h-11 rounded-full flex items-center justify-center transition-all duration-150 cursor-pointer hover:bg-white/[0.06] outline-none';
 
   return (
-    <div className="flex items-center justify-center gap-3">
+    <div className="flex items-center justify-center gap-2">
+      <AddToPlaylistDialog trackUrns={[track.urn]}>
+        <button type="button" className={ctrl}>
+          <ListPlus size={20} className="text-white/30 hover:text-white/60" />
+        </button>
+      </AddToPlaylistDialog>
       <FullscreenLikeButton track={track} />
       <button
         type="button"
         onClick={toggleShuffle}
-        className={`${small} ${shuffle ? 'text-accent' : 'text-white/35 hover:text-white/60'}`}
+        className={`${ctrl} ${shuffle ? 'text-accent' : 'text-white/35 hover:text-white/60'}`}
       >
         {shuffleIcon16}
       </button>
@@ -207,28 +301,34 @@ const Controls = React.memo(({ track }: { track: Track }) => {
       >
         <SkipBack size={20} fill="currentColor" />
       </button>
+
       <button
         type="button"
         onClick={togglePlay}
-        className="w-14 h-14 rounded-full bg-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer shadow-lg"
+        className="w-14 h-14 rounded-full bg-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer shadow-lg outline-none mx-1"
       >
         {isPlaying ? pauseBlack18 : playBlack18}
       </button>
+
       <button type="button" onClick={next} className={`${ctrl} text-white/60 hover:text-white`}>
         <SkipForward size={20} fill="currentColor" />
       </button>
       <button
         type="button"
         onClick={toggleRepeat}
-        className={`${small} ${repeat !== 'off' ? 'text-accent' : 'text-white/35 hover:text-white/60'}`}
+        className={`${ctrl} ${repeat !== 'off' ? 'text-accent' : 'text-white/35 hover:text-white/60'}`}
       >
         {repeat === 'one' ? repeat1Icon16 : repeatIcon16}
       </button>
-      <AddToPlaylistDialog trackUrns={[track.urn]}>
-        <button type="button" className={`${small} text-white/30 hover:text-white/60`}>
-          <ListPlus size={20} />
-        </button>
-      </AddToPlaylistDialog>
+      <FullscreenDislikeButton track={track} />
+      <button 
+        type="button" 
+        className={ctrl} 
+        onClick={() => window.open(track.permalink_url, '_blank')}
+        title="Open in SoundCloud"
+      >
+        <ExternalLink size={18} className="text-white/30 hover:text-white/60" />
+      </button>
     </div>
   );
 });
@@ -265,6 +365,8 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
       </div>
 
       <Controls track={track} />
+      
+      <FullscreenVolumeSlider />
     </div>
   );
 });
@@ -287,7 +389,7 @@ function useArtworkColor(artworkUrl: string | null) {
   return colorRef;
 }
 
-/* ── Synced Lyrics — CSS data-state + DOM scroll, 0 re-renders */
+/* ── Synced Lyrics ─ CSS data-state + DOM scroll, 0 re-renders */
 
 const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -370,7 +472,7 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
   );
 });
 
-/* ── Plain Lyrics ──────────────────────────────────────────── */
+/* ── Plain Lyrics ─────────────────────────────────────────── */
 
 const PlainLyrics = React.memo(({ text }: { text: string }) => (
   <div
@@ -435,7 +537,7 @@ export const LyricsPanel = React.memo(() => {
         <button
           type="button"
           onClick={close}
-          className="w-9 h-9 rounded-full flex items-center justify-center text-white/25 hover:text-white/70 hover:bg-white/[0.08] transition-all duration-200 cursor-pointer"
+          className="w-9 h-9 rounded-full flex items-center justify-center text-white/25 hover:text-white/70 hover:bg-white/[0.08] transition-all duration-200 cursor-pointer outline-none"
         >
           <X size={18} />
         </button>
@@ -453,23 +555,6 @@ export const LyricsPanel = React.memo(() => {
 
         {/* Right: lyrics */}
         <div className="min-h-0 flex flex-col relative">
-          
-          {!isEditing && (
-            <button
-              type="button"
-              onClick={() => {
-                const parsed = splitArtistTitle(track?.title ?? '');
-                setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
-                setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
-                setIsEditing(true);
-              }}
-              className="absolute right-12 top-3 z-20 w-8 h-8 flex items-center justify-center rounded-full text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors"
-              title={t('track.manualSearch', 'Manual Search')}
-            >
-              <Search size={14} />
-            </button>
-          )}
-
           {isEditing ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-4 px-12 animate-fade-in-up">
               <h3 className="text-white/80 font-bold mb-2">{t('track.manualSearch', 'Manual Search')}</h3>
@@ -501,16 +586,38 @@ export const LyricsPanel = React.memo(() => {
             </div>
           ) : lyrics?.synced ? (
             <>
-              <LyricsSourceBadge source={lyrics.source} />
+              <LyricsSourceBadge source={lyrics.source} onSearch={() => {
+                const parsed = splitArtistTitle(track?.title ?? '');
+                setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
+                setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
+                setIsEditing(true);
+              }} />
               <SyncedLyrics lines={lyrics.synced} />
             </>
           ) : lyrics?.plain ? (
             <>
-              <LyricsSourceBadge source={lyrics.source} />
+              <LyricsSourceBadge source={lyrics.source} onSearch={() => {
+                const parsed = splitArtistTitle(track?.title ?? '');
+                setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
+                setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
+                setIsEditing(true);
+              }} />
               <PlainLyrics text={lyrics.plain} />
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center gap-4 px-12 text-center">
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 px-12 text-center relative">
+              <button
+                type="button"
+                onClick={() => {
+                  const parsed = splitArtistTitle(track?.title ?? '');
+                  setEditArtist(manualQuery?.artist || (parsed ? parsed[0] : track?.user.username || ''));
+                  setEditTitle(manualQuery?.title || (parsed ? parsed[1] : track?.title || ''));
+                  setIsEditing(true);
+                }}
+                className="absolute right-0 top-3 w-8 h-8 flex items-center justify-center rounded-full text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors"
+              >
+                <Search size={14} />
+              </button>
               <MicVocal size={40} className="text-white/[0.06]" />
               <p className="text-[15px] text-white/30 font-medium">{t('track.lyricsNotFound')}</p>
               <p className="text-[12px] text-white/15 leading-relaxed max-w-[300px]">
@@ -561,7 +668,7 @@ export const ArtworkPanel = React.memo(() => {
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="w-9 h-9 rounded-full flex items-center justify-center text-white/25 hover:text-white/70 hover:bg-white/[0.08] transition-all duration-200 cursor-pointer"
+          className="w-9 h-9 rounded-full flex items-center justify-center text-white/25 hover:text-white/70 hover:bg-white/[0.08] transition-all duration-200 cursor-pointer outline-none"
         >
           <X size={18} />
         </button>
@@ -575,7 +682,7 @@ export const ArtworkPanel = React.memo(() => {
         <TrackColumn track={track} maxArt="max-w-[420px]" />
       </div>
 
-      <FloatingComments />
+      <FloatingComments mode="sidebar" />
     </div>
   );
 });

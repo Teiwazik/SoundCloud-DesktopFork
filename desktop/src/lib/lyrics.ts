@@ -230,6 +230,14 @@ async function searchGenius(
     });
     
     plainLyrics = plainLyrics.trim();
+    
+    // Clean Genius-specific headers (Contributors, Title Lyrics, [Текст песни])
+    plainLyrics = plainLyrics
+      .replace(/^\d+\s*Contributors/i, '')
+      .replace(/^[^\n]*?Lyrics/i, '')
+      .replace(/^\[Текст песни.*?\]/i, '')
+      .trim();
+
     if (plainLyrics.length > 20) {
       return { plain: plainLyrics, synced: null, source: 'genius' };
     }

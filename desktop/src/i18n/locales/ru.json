@@ -170,7 +170,10 @@
     "hardwareAcceleration": "Аппаратное ускорение",
     "requiresRestart": "Требуется перезапуск приложения",
     "import": "Импорт",
-    "importYandex": "Импорт из Yandex Music"
+    "importYandex": "Импорт из Yandex Music",
+    "qdrantEnabled": "Включить рекомендательный движок",
+    "qdrantEnabledDesc": "Использовать Qdrant для 72D векторного поиска и анализа настроения",
+    "qdrantNote": "Примечание: Вам понадобится кластер Qdrant Cloud. Ваша музыка будет векторизована локально и синхронизирована с Qdrant."
   },
   "eq": {
     "title": "Эквалайзер",

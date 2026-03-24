@@ -1,7 +1,7 @@
 export const API_BASE = import.meta.env.VITE_API_BASE || 'https://api.soundcloud.su';
 
-export const GITHUB_OWNER = 'zxcloli666';
-export const GITHUB_REPO = 'SoundCloud-Desktop';
+export const GITHUB_OWNER = 'Teiwazik';
+export const GITHUB_REPO = 'SoundCloud-DesktopFork';
 export const GITHUB_REPO_EN = 'SoundCloud-Desktop-EN';
 export const APP_VERSION = __APP_VERSION__;
 

@@ -330,13 +330,15 @@ export const AppShell = React.memo(() => {
       <CustomBackground />
       <AmbientGlow />
       <Titlebar />
-      <div className="flex flex-1 min-h-0 relative z-10" style={{ isolation: 'isolate' }}>
+      <div className="flex flex-1 min-h-0 relative z-0" style={{ isolation: 'isolate' }}>
         <Sidebar />
         <main className="flex-1 overflow-y-auto overflow-x-hidden">
           <StableOutlet />
         </main>
       </div>
-      <NowPlayingBar onQueueToggle={onQueueToggle} queueOpen={queueOpen} />
+      <div className="relative z-10">
+        <NowPlayingBar onQueueToggle={onQueueToggle} queueOpen={queueOpen} />
+      </div>
       <QueuePanel open={queueOpen} onClose={onQueueClose} />
       <LyricsPanel />
       <ArtworkPanel />

@@ -21,6 +21,7 @@ export interface Track {
   favoritings_count?: number;
   reposts_count?: number;
   user_favorite?: boolean;
+  bpm?: number;
   access?: 'playable' | 'preview' | 'blocked';
   user: {
     id: number;
@@ -28,6 +29,7 @@ export interface Track {
     username: string;
     avatar_url: string;
     permalink_url: string;
+    followers_count?: number;
   };
 }
 
