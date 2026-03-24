@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { NavLink } from 'react-router-dom';
-import { Home, Library, Search, Settings } from '../lib/icons';
+import { Home, Library, Search, Settings } from '../../lib/icons';
 
 export const MobileNav = React.memo(() => {
   const { t } = useTranslation();
