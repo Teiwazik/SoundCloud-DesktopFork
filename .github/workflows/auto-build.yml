@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [main, mobile]
   workflow_dispatch:
     inputs:
       version_type:
@@ -72,7 +72,7 @@ jobs:
           if ! git diff --quiet; then
             git add desktop/package.json desktop/package-lock.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
-            git push origin HEAD:main
+            git push origin HEAD:${{ github.ref_name }}
           fi
 
   docker:
@@ -254,8 +254,64 @@ jobs:
           name: linux-flatpak
           path: soundcloud-desktop.flatpak
 
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: setup ubuntu dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libasound2-dev
+
+      - name: setup java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Initialize Android
+        working-directory: desktop
+        run: npx tauri android init --ci
+
+      - name: Build Android
+        working-directory: desktop
+        run: npx tauri android build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            desktop/src-tauri/gen/android/app/build/outputs/apk/release/*.apk
+            desktop/src-tauri/gen/android/app/build/outputs/bundle/release/*.aab
+          retention-days: 2
+
   release:
-    needs: [version, build, docker, flatpak]
+    needs: [version, build, docker, flatpak, android]
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -267,7 +323,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/artifacts
-          pattern: '{tauri-builds-*,linux-flatpak,soundcloud-desktop-*.flatpak}'
+          pattern: '{tauri-builds-*,linux-flatpak,soundcloud-desktop-*.flatpak,android-apk}'
           merge-multiple: true
 
       - name: Flatten and deduplicate artifacts
