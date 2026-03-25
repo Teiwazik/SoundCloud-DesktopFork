@@ -3,6 +3,7 @@ import { appCacheDir, join } from '@tauri-apps/api/path';
 import { exists, mkdir, readDir, remove, stat, writeFile } from '@tauri-apps/plugin-fs';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { getSessionId } from './api';
+import { useSettingsStore } from '../stores/settings';
 
 import { API_BASE, getStaticPort } from './constants';
 
@@ -76,7 +77,11 @@ export async function fetchAndCacheTrack(urn: string, signal?: AbortSignal): Pro
   const promise = (async () => {
     try {
       const sessionId = getSessionId();
-      const url = `${API_BASE}/tracks/${encodeURIComponent(urn)}/stream`;
+      const params = new URLSearchParams();
+      if (useSettingsStore.getState().highQualityStreaming) {
+        params.set('hq', 'true');
+      }
+      const url = `${API_BASE}/tracks/${encodeURIComponent(urn)}/stream${params.size ? `?${params.toString()}` : ''}`;
 
       const res = await tauriFetch(url, {
         headers: sessionId ? { 'x-session-id': sessionId } : {},

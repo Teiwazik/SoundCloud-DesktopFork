@@ -59,6 +59,7 @@ export interface SettingsState {
   eqGains: number[];
   eqPreset: string;
   normalizeVolume: boolean;
+  highQualityStreaming: boolean;
   spotifyClientId: string;
   youtubeClientId: string;
   youtubeClientSecret: string;
@@ -105,6 +106,7 @@ export interface SettingsState {
   setEqPreset: (preset: string) => void;
   setEqBand: (index: number, gain: number) => void;
   setNormalizeVolume: (enabled: boolean) => void;
+  setHighQualityStreaming: (enabled: boolean) => void;
   setSpotifyClientId: (id: string) => void;
   setYoutubeClientId: (id: string) => void;
   setYoutubeClientSecret: (secret: string) => void;
@@ -164,6 +166,7 @@ const DEFAULTS = {
   eqGains: DEFAULT_EQ_GAINS,
   eqPreset: 'flat',
   normalizeVolume: true,
+  highQualityStreaming: false,
   spotifyClientId: '',
   youtubeClientId: '',
   youtubeClientSecret: '',
@@ -239,6 +242,7 @@ export const useSettingsStore = create<SettingsState>()(
         set({ normalizeVolume });
         invoke('audio_set_normalization', { enabled: normalizeVolume }).catch(console.error);
       },
+      setHighQualityStreaming: (highQualityStreaming) => set({ highQualityStreaming }),
       setSpotifyClientId: (spotifyClientId) => set({ spotifyClientId }),
       setYoutubeClientId: (youtubeClientId) => set({ youtubeClientId }),
       setYoutubeClientSecret: (youtubeClientSecret) => set({ youtubeClientSecret }),
@@ -284,7 +288,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'sc-settings',
       storage: createJSONStorage(() => tauriStorage),
-      version: 7,
+      version: 8,
       migrate: (persistedState) => {
         const state = (persistedState && typeof persistedState === 'object'
           ? persistedState
@@ -306,6 +310,7 @@ export const useSettingsStore = create<SettingsState>()(
         eqGains: s.eqGains,
         eqPreset: s.eqPreset,
         normalizeVolume: s.normalizeVolume,
+        highQualityStreaming: s.highQualityStreaming,
         spotifyClientId: s.spotifyClientId,
         youtubeClientId: s.youtubeClientId,
         youtubeClientSecret: s.youtubeClientSecret,

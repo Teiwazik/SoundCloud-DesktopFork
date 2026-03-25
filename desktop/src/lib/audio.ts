@@ -3,9 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import type { Track } from '../stores/player';
 import { usePlayerStore } from '../stores/player';
 import { useSettingsStore } from '../stores/settings';
-import { api, getSessionId } from './api';
+import { api, getSessionId, streamUrl } from './api';
 import { fetchAndCacheTrack, getCacheFilePath, isCached } from './cache';
-import { API_BASE } from './constants';
 import { art } from './formatters';
 import { audioAnalyser } from './audio-analyser';
 import { useSoundWaveStore } from '../stores/soundwave';
@@ -121,7 +120,7 @@ async function loadTrack(track: Track, skipStop = false) {
           crossfadeSecs
         });
     } else {
-      const url = `${API_BASE}/tracks/${encodeURIComponent(urn)}/stream`;
+      const url = streamUrl(urn);
       const sessionId = getSessionId();
       result = await invoke<{ duration_secs: number | null }>('audio_load_url', {
         url,

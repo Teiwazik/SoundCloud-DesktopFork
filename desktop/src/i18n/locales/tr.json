@@ -158,6 +158,8 @@
     "playback": "Playback",
     "floatingComments": "Floating comments",
     "floatingCommentsDesc": "Show comments as floating pills during playback",
+    "highQualityStreaming": "High quality streaming",
+    "highQualityStreamingDesc": "Prefer the highest available quality during playback",
     "framerateLimit": "Framerate Limit",
     "unlockLimit": "Unlock Limit",
     "import": "Import",

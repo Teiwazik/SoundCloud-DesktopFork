@@ -175,6 +175,8 @@
     "floatingCommentsDesc": "Show comments as floating pills during playback",
     "normalizeVolume": "Normalize volume",
     "normalizeVolumeDesc": "Level loudness between tracks",
+    "highQualityStreaming": "High quality streaming",
+    "highQualityStreamingDesc": "Prefer the highest available quality during playback",
     "discordRpc": "Discord Rich Presence",
     "discordRpcDesc": "Show what you are listening to in Discord",
     "discordRpcMode": "Display mode",

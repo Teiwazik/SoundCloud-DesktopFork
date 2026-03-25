@@ -1,6 +1,7 @@
 import type { Readable } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
-import { ScPublicApiService } from '../soundcloud/sc-public-api.service.js';
+import { ScPublicAnonService } from '../soundcloud/sc-public-anon.service.js';
+import { ScPublicCookiesService } from '../soundcloud/sc-public-cookies.service.js';
 import { SoundcloudService } from '../soundcloud/soundcloud.service.js';
 import type {
   ScComment,
@@ -16,7 +17,8 @@ export class TracksService {
 
   constructor(
     private readonly sc: SoundcloudService,
-    private readonly scPublicApi: ScPublicApiService,
+    private readonly scPublicAnon: ScPublicAnonService,
+    private readonly scPublicCookies: ScPublicCookiesService,
   ) {}
 
   search(token: string, params?: Record<string, unknown>): Promise<ScPaginatedResponse<ScTrack>> {
@@ -49,6 +51,42 @@ export class TracksService {
     range?: string,
   ): Promise<{ stream: Readable; headers: Record<string, string> }> {
     return this.sc.proxyStream(url, token, range);
+  }
+
+  async getStreamWithFallback(
+    token: string,
+    trackUrn: string,
+    format: string,
+    params: Record<string, unknown>,
+    range?: string,
+    hq = false,
+  ): Promise<{ stream: Readable; headers: Record<string, string> } | null> {
+    let access: 'playable' | 'preview' | 'blocked' = 'playable';
+
+    try {
+      const track = await this.sc.apiGet<ScTrack>(`/tracks/${trackUrn}`, token, params);
+      access = track.access;
+    } catch {
+      // no-op, fallback chain below
+    }
+
+    if (hq || access !== 'playable') {
+      const cookie = await this.getCookieStream(trackUrn);
+      if (cookie) return cookie;
+
+      const oauth = await this.tryOAuthStream(token, trackUrn, format, params, range);
+      if (oauth) return oauth;
+
+      return this.getPublicStream(trackUrn, format);
+    }
+
+    const oauth = await this.tryOAuthStream(token, trackUrn, format, params, range);
+    if (oauth) return oauth;
+
+    const pub = await this.getPublicStream(trackUrn, format);
+    if (pub) return pub;
+
+    return this.getCookieStream(trackUrn);
   }
 
   async tryOAuthStream(
@@ -86,12 +124,11 @@ export class TracksService {
 
         try {
           if (isHls) {
-            return await this.scPublicApi.streamFromHls(url, this.hlsMimeType(fmt));
+            return await this.scPublicAnon.streamFromHls(url, this.hlsMimeType(fmt));
           }
           return await this.proxyStream(token, url, range);
         } catch (err: any) {
           this.logger.warn(`Stream format ${fmt} failed: ${err.message}, trying next...`);
-          continue;
         }
       }
 
@@ -107,16 +144,31 @@ export class TracksService {
     return 'audio/mpeg';
   }
 
+  async getCookieStream(
+    trackUrn: string,
+  ): Promise<{ stream: Readable; headers: Record<string, string> } | null> {
+    if (!this.scPublicCookies.hasCookies) return null;
+    try {
+      return (await this.scPublicCookies.getStreamViaCookies(trackUrn)) as {
+        stream: Readable;
+        headers: Record<string, string>;
+      } | null;
+    } catch (err: any) {
+      this.logger.warn(`Cookie stream failed for ${trackUrn}: ${err.message}`);
+      return null;
+    }
+  }
+
   /**
    * Fallback: resolve stream via SoundCloud public API (no OAuth).
    * Used when the authenticated /streams endpoint fails or returns empty.
-   */
+  */
   async getPublicStream(
     trackUrn: string,
     format?: string,
   ): Promise<{ stream: Readable; headers: Record<string, string> } | null> {
     try {
-      return await this.scPublicApi.getStreamForTrack(trackUrn, format);
+      return await this.scPublicAnon.getStreamForTrack(trackUrn, format);
     } catch (err: any) {
       this.logger.warn(`Public API fallback failed for ${trackUrn}: ${err.message}`);
       return null;

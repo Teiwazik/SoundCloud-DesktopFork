@@ -53,6 +53,14 @@ DATABASE_NAME=soundcloud_desktop
 PORT=3000
 ```
 
+### Дополнительные переменные (опционально)
+
+| Переменная | Описание |
+|---|---|
+| `SC_PROXY_URL` | Прокси URL для API-запросов к SoundCloud |
+| `SC_STREAM_PROXY_URL` | Отдельный прокси URL для stream/HLS-запросов |
+| `SC_COOKIES` | Cookies с `soundcloud.com` для fallback стриминга GO+/HQ |
+
 ---
 
 ## 3. Запуск

@@ -734,6 +734,8 @@ const PlaybackSection = React.memo(function PlaybackSection() {
   const setFloatingComments = useSettingsStore((s) => s.setFloatingComments);
   const normalizeVolume = useSettingsStore((s) => s.normalizeVolume);
   const setNormalizeVolume = useSettingsStore((s) => s.setNormalizeVolume);
+  const highQualityStreaming = useSettingsStore((s) => s.highQualityStreaming);
+  const setHighQualityStreaming = useSettingsStore((s) => s.setHighQualityStreaming);
   const discordRpc = useSettingsStore((s) => s.discordRpc);
   const setDiscordRpc = useSettingsStore((s) => s.setDiscordRpc);
   const discordRpcMode = useSettingsStore((s) => s.discordRpcMode);
@@ -796,6 +798,27 @@ const PlaybackSection = React.memo(function PlaybackSection() {
           <div
             className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
               normalizeVolume ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
+            }`}
+          />
+        </button>
+      </div>
+
+      <div className="border-t border-white/[0.04]" />
+
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-[13px] text-white/70 font-medium">{t('settings.highQualityStreaming')}</p>
+          <p className="text-[11px] text-white/30 mt-0.5">{t('settings.highQualityStreamingDesc')}</p>
+        </div>
+        <button
+          onClick={() => setHighQualityStreaming(!highQualityStreaming)}
+          className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
+            highQualityStreaming ? 'bg-accent' : 'bg-white/10'
+          }`}
+        >
+          <div
+            className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
+              highQualityStreaming ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
             }`}
           />
         </button>

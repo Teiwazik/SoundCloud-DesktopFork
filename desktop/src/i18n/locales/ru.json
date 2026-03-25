@@ -176,6 +176,8 @@
     "floatingCommentsDesc": "Показывать комментарии как всплывающие пилюли во время воспроизведения",
     "normalizeVolume": "Нормализация громкости",
     "normalizeVolumeDesc": "Выравнивать громкость между треками",
+    "highQualityStreaming": "Высокое качество стрима",
+    "highQualityStreamingDesc": "Стараться воспроизводить треки в максимально доступном качестве",
     "discordRpc": "Discord Rich Presence",
     "discordRpcDesc": "Показывать в Discord, что вы сейчас слушаете",
     "discordRpcMode": "Режим отображения",

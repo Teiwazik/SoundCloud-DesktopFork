@@ -50,7 +50,7 @@ export class ScTranscoding {
   @ApiProperty() url: string;
   @ApiProperty() preset: string;
   @ApiProperty() duration: number;
-  @ApiProperty() snipped: boolean;
+  @ApiProperty() snipped?: boolean;
   @ApiProperty({
     type: 'object',
     properties: {
@@ -179,7 +179,6 @@ export class ScStreams {
   @ApiPropertyOptional() hls_mp3_128_url?: string;
   @ApiPropertyOptional() hls_aac_160_url?: string;
   @ApiPropertyOptional() hls_opus_64_url?: string;
-  @ApiPropertyOptional() preview_mp3_128_url?: string;
 }
 
 export class ScPaginatedResponse<T> {

@@ -34,6 +34,9 @@ services:
       SOUNDCLOUD_CLIENT_ID: ${SOUNDCLOUD_CLIENT_ID}
       SOUNDCLOUD_CLIENT_SECRET: ${SOUNDCLOUD_CLIENT_SECRET}
       SOUNDCLOUD_REDIRECT_URI: ${SOUNDCLOUD_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      SC_PROXY_URL: ${SC_PROXY_URL:-}
+      SC_STREAM_PROXY_URL: ${SC_STREAM_PROXY_URL:-}
+      SC_COOKIES: ${SC_COOKIES:-}
     depends_on:
       db:
         condition: service_healthy
@@ -55,6 +58,9 @@ services:
       SOUNDCLOUD_CLIENT_ID: ${SOUNDCLOUD_CLIENT_ID}
       SOUNDCLOUD_CLIENT_SECRET: ${SOUNDCLOUD_CLIENT_SECRET}
       SOUNDCLOUD_REDIRECT_URI: ${SOUNDCLOUD_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      SC_PROXY_URL: ${SC_PROXY_URL:-}
+      SC_STREAM_PROXY_URL: ${SC_STREAM_PROXY_URL:-}
+      SC_COOKIES: ${SC_COOKIES:-}
     volumes:
       - ./src:/app/src
       - ./tsconfig.json:/app/tsconfig.json

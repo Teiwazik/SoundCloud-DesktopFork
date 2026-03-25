@@ -1,6 +1,7 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import { useSettingsStore } from '../stores/settings';
 import { API_BASE } from './constants';
 
 let sessionId: string | null = null;
@@ -128,7 +129,14 @@ export class ApiError extends Error {
 }
 
 export function streamUrl(trackUrn: string, format = 'http_mp3_128') {
-  return `${API_BASE}/tracks/${encodeURIComponent(trackUrn)}/stream?format=${format}${sessionId ? `&session_id=${sessionId}` : ''}`;
+  const params = new URLSearchParams({ format });
+  if (useSettingsStore.getState().highQualityStreaming) {
+    params.set('hq', 'true');
+  }
+  if (sessionId) {
+    params.set('session_id', sessionId);
+  }
+  return `${API_BASE}/tracks/${encodeURIComponent(trackUrn)}/stream?${params.toString()}`;
 }
 
 export interface TrackComment {
