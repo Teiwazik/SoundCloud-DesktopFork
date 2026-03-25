@@ -20,7 +20,6 @@ export class SoundcloudService {
   private readonly defaultClientId: string;
   private readonly defaultRedirectUri: string;
   private readonly apiProxyUrl: string;
-  private readonly streamProxyUrl: string;
 
   constructor(
     private readonly httpService: HttpService,
@@ -29,7 +28,6 @@ export class SoundcloudService {
     this.defaultClientId = this.configService.get<string>('soundcloud.clientId')!;
     this.defaultRedirectUri = this.configService.get<string>('soundcloud.redirectUri')!;
     this.apiProxyUrl = this.configService.get<string>('soundcloud.proxyUrl') ?? '';
-    this.streamProxyUrl = this.configService.get<string>('soundcloud.streamProxyUrl') ?? '';
   }
 
   get scAuthBaseUrl() {
@@ -42,6 +40,10 @@ export class SoundcloudService {
 
   get scDefaultRedirectUri() {
     return this.defaultRedirectUri;
+  }
+
+  get scApiProxyUrl() {
+    return this.apiProxyUrl;
   }
 
   /**
@@ -213,7 +215,7 @@ export class SoundcloudService {
     const extra: Record<string, string> = { Authorization: `OAuth ${accessToken}` };
     if (range) extra.Range = range;
 
-    const { url, headers } = this.proxyWith(this.streamProxyUrl, streamUrl, extra);
+    const { url, headers } = this.proxyWith(this.apiProxyUrl, streamUrl, extra);
     const { data, headers: resHeaders } = await firstValueFrom(
       this.httpService.get(url, { headers, responseType: 'stream', maxRedirects: 5 }),
     );

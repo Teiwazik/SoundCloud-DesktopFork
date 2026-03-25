@@ -1,28 +1,27 @@
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { firstValueFrom } from 'rxjs';
 import { OAuthAppsService } from '../oauth-apps/oauth-apps.service.js';
 import { ScPublicAnonService } from './sc-public-anon.service.js';
 import {
+  type CookieHydrationData,
   extractCookieHydrationData,
   getCookieValue,
-  proxyTarget,
-  type CookieHydrationData,
+  proxyGetWithRetry,
   type ScTranscodingInfo,
+  streamFromHls,
 } from './sc-public-utils.js';
 
 @Injectable()
 export class ScPublicCookiesService {
-  private static readonly USER_AGENT =
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36';
+  private static readonly USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36';
   private static readonly ORIGIN = 'https://soundcloud.com';
   private static readonly REFERER = 'https://soundcloud.com/';
   private static readonly FAILURE_THRESHOLD = 3;
   private static readonly ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 
   private readonly logger = new Logger(ScPublicCookiesService.name);
-  private readonly streamProxyUrl: string;
+  private readonly streamProxyUrls: string[];
   private readonly cookies: string;
   private readonly oauthToken: string | null;
   private consecutiveFailures = 0;
@@ -36,7 +35,7 @@ export class ScPublicCookiesService {
     private readonly scPublicAnon: ScPublicAnonService,
     private readonly oauthAppsService: OAuthAppsService,
   ) {
-    this.streamProxyUrl = this.configService.get<string>('soundcloud.streamProxyUrl') ?? '';
+    this.streamProxyUrls = this.configService.get<string[]>('soundcloud.streamProxyUrls') ?? [];
     this.cookies = this.configService.get<string>('soundcloud.cookies') ?? '';
     this.oauthToken = getCookieValue(this.cookies, 'oauth_token');
   }
@@ -93,14 +92,21 @@ export class ScPublicCookiesService {
 
     for (const transcoding of ordered) {
       try {
-        const streamUrl = await this.resolveEncryptedTranscoding(transcoding.url, trackAuth, hydration.clientId);
-        const result = await this.scPublicAnon.streamFromHls(streamUrl, transcoding.format.mime_type);
+        const streamUrl = await this.resolveEncryptedTranscoding(
+          transcoding.url,
+          trackAuth,
+          hydration.clientId,
+        );
+        const result = await streamFromHls(
+          this.httpService,
+          this.streamProxyUrls,
+          streamUrl,
+          transcoding.format.mime_type,
+        );
         await this.recordSuccess();
         return result;
       } catch (err: any) {
-        this.logger.warn(
-          `Cookie stream ${transcoding.preset} failed: ${err.message}`,
-        );
+        this.logger.warn(`Cookie stream ${transcoding.preset} failed: ${err.message}`);
       }
     }
 
@@ -110,13 +116,12 @@ export class ScPublicCookiesService {
 
   private async fetchHydrationSound(permalinkUrl: string): Promise<CookieHydrationData | null> {
     try {
-      const { url, headers } = proxyTarget(this.streamProxyUrl, permalinkUrl, {
-        'User-Agent': ScPublicCookiesService.USER_AGENT,
-        Cookie: this.cookies,
-      });
-
-      const { data: html } = await firstValueFrom(
-        this.httpService.get<string>(url, { headers, responseType: 'text' }),
+      const { data: html } = await proxyGetWithRetry<string>(
+        this.httpService,
+        this.streamProxyUrls,
+        permalinkUrl,
+        { 'User-Agent': ScPublicCookiesService.USER_AGENT, Cookie: this.cookies },
+        { responseType: 'text' },
       );
 
       return extractCookieHydrationData(html);
@@ -145,7 +150,9 @@ export class ScPublicCookiesService {
     this.degraded = true;
     this.lastAlertAt = now;
 
-    const detailsSuffix = details ? `\nDetails: <code>${this.escapeHtml(details.slice(0, 300))}</code>` : '';
+    const detailsSuffix = details
+      ? `\nDetails: <code>${this.escapeHtml(details.slice(0, 300))}</code>`
+      : '';
     await this.oauthAppsService.notify(
       `⚠️ <b>Cookie stream degraded</b>\n\n` +
         `Reason: <code>${this.escapeHtml(reason)}</code>\n` +
@@ -178,10 +185,7 @@ export class ScPublicCookiesService {
   }
 
   private escapeHtml(value: string): string {
-    return value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;');
+    return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   }
 
   private buildResolveHeaders(): Record<string, string> {
@@ -198,15 +202,6 @@ export class ScPublicCookiesService {
     };
   }
 
-  private async resolveTranscodingUrl(transcodingUrl: string, clientId: string): Promise<string> {
-    const target = `${transcodingUrl}${transcodingUrl.includes('?') ? '&' : '?'}client_id=${clientId}`;
-    const { url, headers } = proxyTarget(this.streamProxyUrl, target, this.buildResolveHeaders());
-    const { data } = await firstValueFrom(
-      this.httpService.get<{ url: string }>(url, { headers }),
-    );
-    return data.url;
-  }
-
   private async resolveEncryptedTranscoding(
     transcodingUrl: string,
     trackAuthorization: string,
@@ -214,9 +209,11 @@ export class ScPublicCookiesService {
   ): Promise<string> {
     const separator = transcodingUrl.includes('?') ? '&' : '?';
     const target = `${transcodingUrl}${separator}client_id=${clientId}&track_authorization=${trackAuthorization}`;
-    const { url, headers } = proxyTarget(this.streamProxyUrl, target, this.buildResolveHeaders());
-    const { data } = await firstValueFrom(
-      this.httpService.get<{ url: string; licenseAuthToken?: string }>(url, { headers }),
+    const { data } = await proxyGetWithRetry<{ url: string; licenseAuthToken?: string }>(
+      this.httpService,
+      this.streamProxyUrls,
+      target,
+      this.buildResolveHeaders(),
     );
     return data.url;
   }

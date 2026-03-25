@@ -1,3 +1,15 @@
+function collectStreamProxyUrls(): string[] {
+  const urls: string[] = [];
+  const primary = process.env.SC_STREAM_PROXY_URL || process.env.SC_PROXY_URL || '';
+  if (primary) urls.push(primary);
+  for (let i = 2; ; i++) {
+    const url = process.env[`SC_STREAM_PROXY_URL_${i}`];
+    if (!url) break;
+    urls.push(url);
+  }
+  return urls;
+}
+
 export default () => ({
   port: Number.parseInt(process.env.PORT || '3000', 10),
   soundcloud: {
@@ -5,7 +17,7 @@ export default () => ({
     clientSecret: process.env.SOUNDCLOUD_CLIENT_SECRET || '',
     redirectUri: process.env.SOUNDCLOUD_REDIRECT_URI || 'http://localhost:3000/auth/callback',
     proxyUrl: process.env.SC_PROXY_URL || '',
-    streamProxyUrl: process.env.SC_STREAM_PROXY_URL || process.env.SC_PROXY_URL || '',
+    streamProxyUrls: collectStreamProxyUrls(),
     cookies: process.env.SC_COOKIES || '',
   },
   database: {

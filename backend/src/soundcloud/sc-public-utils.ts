@@ -1,3 +1,6 @@
+import { PassThrough, Readable } from 'node:stream';
+import { firstValueFrom } from 'rxjs';
+
 export interface ScTranscodingInfo {
   url: string;
   preset: string;
@@ -57,11 +60,49 @@ export function proxyTarget(
   };
 }
 
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+/**
+ * GET через массив прокси с retry на 5xx/429.
+ * Пробует каждый proxyUrl по порядку, fallback на прямой запрос если массив пуст.
+ */
+export async function proxyGetWithRetry<T = any>(
+  httpService: HlsHttpService,
+  proxyUrls: string[],
+  targetUrl: string,
+  extra: Record<string, string> = {},
+  config: Record<string, unknown> = {},
+): Promise<{ data: T; headers: Record<string, string> }> {
+  const candidates = proxyUrls.length > 0 ? proxyUrls : [''];
+  let lastError: any;
+
+  for (const proxy of candidates) {
+    const { url, headers } = proxyTarget(proxy, targetUrl, extra);
+    try {
+      const res = (await firstValueFrom(httpService.get(url, { ...config, headers }))) as any;
+      return { data: res.data as T, headers: res.headers ?? {} };
+    } catch (err: any) {
+      lastError = err;
+      const status = err?.response?.status ?? err?.status;
+      if (status && isRetryableStatus(status) && proxy !== candidates[candidates.length - 1]) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError;
+}
+
 export function pickTranscoding(
   transcodings: ScTranscodingInfo[],
   preferredFormat?: string,
 ): ScTranscodingInfo | null {
-  const candidates = transcodings.filter((t) => !t.format?.protocol?.includes('encrypted') && !t.snipped && !t.url.includes("/preview"));
+  const candidates = transcodings.filter(
+    (t) => !t.format?.protocol?.includes('encrypted') && !t.snipped && !t.url.includes('/preview'),
+  );
   if (!candidates.length) return null;
 
   if (preferredFormat) {
@@ -109,6 +150,97 @@ export function parseM3u8(
 export function resolveSegmentUrl(url: string, base: URL): string {
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
   return new URL(url, base).href;
+}
+
+// ─── HLS streaming ───────────────────────────────────────
+
+const HLS_PREFETCH_SEGMENTS = 3;
+
+type HlsHttpService = { get: (...args: any[]) => any };
+
+async function downloadSegment(
+  httpService: HlsHttpService,
+  proxyUrls: string[],
+  segmentUrl: string,
+): Promise<Buffer> {
+  const { data } = await proxyGetWithRetry(
+    httpService,
+    proxyUrls,
+    segmentUrl,
+    {},
+    { responseType: 'arraybuffer' },
+  );
+  return Buffer.from(data);
+}
+
+async function pipeSegments(
+  httpService: HlsHttpService,
+  proxyUrls: string[],
+  output: PassThrough,
+  initSegmentPromise: Promise<Buffer | null>,
+  segmentUrls: string[],
+): Promise<void> {
+  const initSegment = await initSegmentPromise;
+  if (initSegment) {
+    if (initSegment.includes(Buffer.from('enca'))) {
+      throw new Error('Stream is CENC encrypted');
+    }
+    if (!output.writable) return;
+    output.write(initSegment);
+  }
+
+  const inflight: Array<Promise<Buffer>> = [];
+  let nextIndex = 0;
+
+  const fillQueue = () => {
+    while (nextIndex < segmentUrls.length && inflight.length < HLS_PREFETCH_SEGMENTS) {
+      inflight.push(downloadSegment(httpService, proxyUrls, segmentUrls[nextIndex]));
+      nextIndex += 1;
+    }
+  };
+
+  fillQueue();
+
+  while (inflight.length > 0) {
+    const chunk = await inflight.shift()!;
+    if (!output.writable) break;
+    output.write(chunk);
+    fillQueue();
+  }
+  output.end();
+}
+
+export async function streamFromHls(
+  httpService: HlsHttpService,
+  proxyUrls: string | string[],
+  m3u8Url: string,
+  mimeType: string,
+): Promise<{ stream: Readable; headers: Record<string, string> }> {
+  const proxies = Array.isArray(proxyUrls) ? proxyUrls : proxyUrls ? [proxyUrls] : [];
+
+  const { data: m3u8Content } = await proxyGetWithRetry<string>(
+    httpService,
+    proxies,
+    m3u8Url,
+    {},
+    { responseType: 'text' },
+  );
+
+  const { initUrl, segmentUrls } = parseM3u8(m3u8Content, m3u8Url);
+  if (!segmentUrls.length) {
+    throw new Error('No segments found in m3u8 playlist');
+  }
+
+  const initSegmentPromise = initUrl
+    ? downloadSegment(httpService, proxies, initUrl)
+    : Promise.resolve<Buffer | null>(null);
+
+  const passthrough = new PassThrough();
+  pipeSegments(httpService, proxies, passthrough, initSegmentPromise, segmentUrls).catch((err) => {
+    passthrough.destroy(err);
+  });
+
+  return { stream: passthrough, headers: { 'content-type': getContentTypeForMime(mimeType) } };
 }
 
 export function parseCookieHeader(cookieHeader: string): Record<string, string> {
@@ -180,7 +312,7 @@ function findHydrationData<T>(entries: HydrationEntry[], hydratable: string): T 
 
 export function extractClientIdFromHydration(html: string): string | null {
   const entries = parseHydrationEntries(html);
-  return entries ? findHydrationData<{ id?: string }>(entries, 'apiClient')?.id ?? null : null;
+  return entries ? (findHydrationData<{ id?: string }>(entries, 'apiClient')?.id ?? null) : null;
 }
 
 export function extractCookieHydrationData(html: string): CookieHydrationData | null {

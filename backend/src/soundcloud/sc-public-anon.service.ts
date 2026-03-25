@@ -1,32 +1,29 @@
-import { PassThrough, Readable } from 'node:stream';
+import type { Readable } from 'node:stream';
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { firstValueFrom } from 'rxjs';
 import {
   extractClientIdFromHydration,
-  getContentTypeForMime,
-  parseM3u8,
   pickTranscoding,
-  proxyTarget,
+  proxyGetWithRetry,
   type ScResolvedTrack,
+  streamFromHls,
 } from './sc-public-utils.js';
 
 const SC_BASE_URL = 'https://soundcloud.com';
 const SC_API_V2 = 'https://api-v2.soundcloud.com';
-const HLS_PREFETCH_SEGMENTS = 3;
 
 @Injectable()
 export class ScPublicAnonService {
   private readonly logger = new Logger(ScPublicAnonService.name);
-  private readonly streamProxyUrl: string;
+  private readonly streamProxyUrls: string[];
   private clientId: string | null = null;
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.streamProxyUrl = this.configService.get<string>('soundcloud.streamProxyUrl') ?? '';
+    this.streamProxyUrls = this.configService.get<string[]>('soundcloud.streamProxyUrls') ?? [];
   }
 
   async getClientId(): Promise<string> {
@@ -39,17 +36,19 @@ export class ScPublicAnonService {
     const target = `${SC_API_V2}/tracks/${trackId}?client_id=${clientId}`;
 
     try {
-      const { url, headers } = proxyTarget(this.streamProxyUrl, target);
-      const { data } = await firstValueFrom(
-        this.httpService.get<ScResolvedTrack>(url, { headers }),
+      const { data } = await proxyGetWithRetry<ScResolvedTrack>(
+        this.httpService,
+        this.streamProxyUrls,
+        target,
       );
       return data;
     } catch {
       const newClientId = await this.invalidateAndRefresh();
       const retryTarget = `${SC_API_V2}/tracks/${trackId}?client_id=${newClientId}`;
-      const { url, headers } = proxyTarget(this.streamProxyUrl, retryTarget);
-      const { data } = await firstValueFrom(
-        this.httpService.get<ScResolvedTrack>(url, { headers }),
+      const { data } = await proxyGetWithRetry<ScResolvedTrack>(
+        this.httpService,
+        this.streamProxyUrls,
+        retryTarget,
       );
       return data;
     }
@@ -60,9 +59,10 @@ export class ScPublicAnonService {
     const target = `${transcodingUrl}${transcodingUrl.includes('?') ? '&' : '?'}client_id=${clientId}`;
 
     try {
-      const { url, headers } = proxyTarget(this.streamProxyUrl, target);
-      const { data } = await firstValueFrom(
-        this.httpService.get<{ url: string }>(url, { headers }),
+      const { data } = await proxyGetWithRetry<{ url: string }>(
+        this.httpService,
+        this.streamProxyUrls,
+        target,
       );
       return data.url;
     } catch {
@@ -70,9 +70,10 @@ export class ScPublicAnonService {
 
       const newClientId = await this.invalidateAndRefresh();
       const retryTarget = `${transcodingUrl}${transcodingUrl.includes('?') ? '&' : '?'}client_id=${newClientId}`;
-      const { url, headers } = proxyTarget(this.streamProxyUrl, retryTarget);
-      const { data } = await firstValueFrom(
-        this.httpService.get<{ url: string }>(url, { headers }),
+      const { data } = await proxyGetWithRetry<{ url: string }>(
+        this.httpService,
+        this.streamProxyUrls,
+        retryTarget,
       );
       return data.url;
     }
@@ -87,36 +88,12 @@ export class ScPublicAnonService {
     const separator = transcodingUrl.includes('?') ? '&' : '?';
     const target = `${transcodingUrl}${separator}client_id=${clientId}&track_authorization=${trackAuthorization}`;
 
-    const { url, headers } = proxyTarget(this.streamProxyUrl, target);
-    const { data } = await firstValueFrom(
-      this.httpService.get<{ url: string; licenseAuthToken?: string }>(url, { headers }),
+    const { data } = await proxyGetWithRetry<{ url: string; licenseAuthToken?: string }>(
+      this.httpService,
+      this.streamProxyUrls,
+      target,
     );
     return data.url;
-  }
-
-  async streamFromHls(
-    m3u8Url: string,
-    mimeType: string,
-  ): Promise<{ stream: Readable; headers: Record<string, string> }> {
-    const { url, headers } = proxyTarget(this.streamProxyUrl, m3u8Url);
-    const { data: m3u8Content } = await firstValueFrom(
-      this.httpService.get<string>(url, { headers, responseType: 'text' }),
-    );
-
-    const { initUrl, segmentUrls } = parseM3u8(m3u8Content, m3u8Url);
-    if (!segmentUrls.length) {
-      throw new Error('No segments found in m3u8 playlist');
-    }
-
-    const initSegmentPromise = initUrl ? this.downloadSegment(initUrl) : Promise.resolve<Buffer | null>(null);
-
-    const passthrough = new PassThrough();
-    this.pipeSegments(passthrough, initSegmentPromise, segmentUrls).catch((err) => {
-      this.logger.error(`HLS segment streaming failed: ${err.message}`);
-      passthrough.destroy(err);
-    });
-
-    return { stream: passthrough, headers: { 'content-type': getContentTypeForMime(mimeType) } };
   }
 
   async getStreamForTrack(
@@ -138,7 +115,12 @@ export class ScPublicAnonService {
       const transcoding = pickTranscoding(retryTranscodings, format);
       if (!transcoding) return null;
       const m3u8Url = await this.resolveTranscodingUrl(transcoding.url);
-      return this.streamFromHls(m3u8Url, transcoding.format.mime_type);
+      return streamFromHls(
+        this.httpService,
+        this.streamProxyUrls,
+        m3u8Url,
+        transcoding.format.mime_type,
+      );
     }
 
     const transcoding = pickTranscoding(transcodings, format);
@@ -146,7 +128,12 @@ export class ScPublicAnonService {
 
     try {
       const m3u8Url = await this.resolveTranscodingUrl(transcoding.url);
-      return await this.streamFromHls(m3u8Url, transcoding.format.mime_type);
+      return await streamFromHls(
+        this.httpService,
+        this.streamProxyUrls,
+        m3u8Url,
+        transcoding.format.mime_type,
+      );
     } catch {
       this.logger.warn(`Stream failed for track ${trackId}, refreshing client_id`);
       await this.invalidateAndRefresh();
@@ -154,17 +141,22 @@ export class ScPublicAnonService {
       const retryTranscoding = pickTranscoding(retryTrack.media?.transcodings ?? [], format);
       if (!retryTranscoding) return null;
       const m3u8Url = await this.resolveTranscodingUrl(retryTranscoding.url);
-      return this.streamFromHls(m3u8Url, retryTranscoding.format.mime_type);
+      return streamFromHls(
+        this.httpService,
+        this.streamProxyUrls,
+        m3u8Url,
+        retryTranscoding.format.mime_type,
+      );
     }
   }
 
   private async refreshClientId(): Promise<string> {
-    const { url, headers } = proxyTarget(this.streamProxyUrl, SC_BASE_URL, {
-      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-    });
-
-    const { data: html } = await firstValueFrom(
-      this.httpService.get<string>(url, { headers, responseType: 'text' }),
+    const { data: html } = await proxyGetWithRetry<string>(
+      this.httpService,
+      this.streamProxyUrls,
+      SC_BASE_URL,
+      { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
+      { responseType: 'text' },
     );
 
     const clientId = extractClientIdFromHydration(html);
@@ -180,55 +172,5 @@ export class ScPublicAnonService {
   private invalidateAndRefresh(): Promise<string> {
     this.clientId = null;
     return this.refreshClientId();
-  }
-
-  private async pipeSegments(
-    output: PassThrough,
-    initSegmentPromise: Promise<Buffer | null>,
-    segmentUrls: string[],
-  ): Promise<void> {
-    try {
-      const initSegment = await initSegmentPromise;
-      if (initSegment) {
-        if (initSegment.includes(Buffer.from('enca'))) {
-          throw new Error('Stream is CENC encrypted');
-        }
-        if (!output.writable) return;
-        output.write(initSegment);
-      }
-
-      const inflight: Array<Promise<Buffer>> = [];
-      let nextIndex = 0;
-
-      const fillQueue = () => {
-        while (
-          nextIndex < segmentUrls.length &&
-          inflight.length < HLS_PREFETCH_SEGMENTS
-        ) {
-          inflight.push(this.downloadSegment(segmentUrls[nextIndex]));
-          nextIndex += 1;
-        }
-      };
-
-      fillQueue();
-
-      while (inflight.length > 0) {
-        const chunk = await inflight.shift()!;
-        if (!output.writable) break;
-        output.write(chunk);
-        fillQueue();
-      }
-      output.end();
-    } catch (err) {
-      output.destroy(err as Error);
-    }
-  }
-
-  private async downloadSegment(segmentUrl: string): Promise<Buffer> {
-    const { url, headers } = proxyTarget(this.streamProxyUrl, segmentUrl);
-    const { data } = await firstValueFrom(
-      this.httpService.get(url, { headers, responseType: 'arraybuffer' }),
-    );
-    return Buffer.from(data);
   }
 }

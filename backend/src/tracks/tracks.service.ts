@@ -1,7 +1,9 @@
 import type { Readable } from 'node:stream';
+import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ScPublicAnonService } from '../soundcloud/sc-public-anon.service.js';
 import { ScPublicCookiesService } from '../soundcloud/sc-public-cookies.service.js';
+import { streamFromHls } from '../soundcloud/sc-public-utils.js';
 import { SoundcloudService } from '../soundcloud/soundcloud.service.js';
 import type {
   ScComment,
@@ -19,6 +21,7 @@ export class TracksService {
     private readonly sc: SoundcloudService,
     private readonly scPublicAnon: ScPublicAnonService,
     private readonly scPublicCookies: ScPublicCookiesService,
+    private readonly httpService: HttpService,
   ) {}
 
   search(token: string, params?: Record<string, unknown>): Promise<ScPaginatedResponse<ScTrack>> {
@@ -124,7 +127,12 @@ export class TracksService {
 
         try {
           if (isHls) {
-            return await this.scPublicAnon.streamFromHls(url, this.hlsMimeType(fmt));
+            return await streamFromHls(
+              this.httpService,
+              this.sc.scApiProxyUrl,
+              url,
+              this.hlsMimeType(fmt),
+            );
           }
           return await this.proxyStream(token, url, range);
         } catch (err: any) {
