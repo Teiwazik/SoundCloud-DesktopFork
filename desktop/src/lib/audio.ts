@@ -4,7 +4,12 @@ import type { Track } from '../stores/player';
 import { usePlayerStore } from '../stores/player';
 import { useSettingsStore } from '../stores/settings';
 import { api, getSessionId, streamUrl } from './api';
-import { fetchAndCacheTrack, getCacheFilePath, isCached } from './cache';
+import {
+  fetchAndCacheTrack,
+  getCacheFilePath,
+  getCacheTargetPath,
+  isCached,
+} from './cache';
 import { art } from './formatters';
 import { audioAnalyser } from './audio-analyser';
 import { useSoundWaveStore } from '../stores/soundwave';
@@ -120,17 +125,13 @@ async function loadTrack(track: Track, skipStop = false) {
           crossfadeSecs
         });
     } else {
-      const url = streamUrl(urn);
-      const sessionId = getSessionId();
       result = await invoke<{ duration_secs: number | null }>('audio_load_url', {
-        url,
-        sessionId: sessionId || null,
-        cachePath: null,
+        url: streamUrl(urn),
+        sessionId: getSessionId(),
+        cachePath: await getCacheTargetPath(urn),
         cacheKey: urn,
         crossfadeSecs
       });
-      // Background cache for next time
-      fetchAndCacheTrack(urn).catch(() => {});
     }
     // Detect preview: real audio duration is much shorter than track metadata duration
     if (result.duration_secs != null && fallbackDuration > 0) {

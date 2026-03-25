@@ -14,6 +14,7 @@ import {
 
 const SC_BASE_URL = 'https://soundcloud.com';
 const SC_API_V2 = 'https://api-v2.soundcloud.com';
+const HLS_PREFETCH_SEGMENTS = 3;
 
 @Injectable()
 export class ScPublicAnonService {
@@ -107,16 +108,10 @@ export class ScPublicAnonService {
       throw new Error('No segments found in m3u8 playlist');
     }
 
-    let initSegment: Buffer | null = null;
-    if (initUrl) {
-      initSegment = await this.downloadSegment(initUrl);
-      if (initSegment.includes(Buffer.from('enca'))) {
-        throw new Error('Stream is CENC encrypted');
-      }
-    }
+    const initSegmentPromise = initUrl ? this.downloadSegment(initUrl) : Promise.resolve<Buffer | null>(null);
 
     const passthrough = new PassThrough();
-    this.pipeSegments(passthrough, initSegment, segmentUrls).catch((err) => {
+    this.pipeSegments(passthrough, initSegmentPromise, segmentUrls).catch((err) => {
       this.logger.error(`HLS segment streaming failed: ${err.message}`);
       passthrough.destroy(err);
     });
@@ -189,14 +184,39 @@ export class ScPublicAnonService {
 
   private async pipeSegments(
     output: PassThrough,
-    initSegment: Buffer | null,
+    initSegmentPromise: Promise<Buffer | null>,
     segmentUrls: string[],
   ): Promise<void> {
     try {
-      if (initSegment) output.write(initSegment);
-      for (const segUrl of segmentUrls) {
+      const initSegment = await initSegmentPromise;
+      if (initSegment) {
+        if (initSegment.includes(Buffer.from('enca'))) {
+          throw new Error('Stream is CENC encrypted');
+        }
+        if (!output.writable) return;
+        output.write(initSegment);
+      }
+
+      const inflight: Array<Promise<Buffer>> = [];
+      let nextIndex = 0;
+
+      const fillQueue = () => {
+        while (
+          nextIndex < segmentUrls.length &&
+          inflight.length < HLS_PREFETCH_SEGMENTS
+        ) {
+          inflight.push(this.downloadSegment(segmentUrls[nextIndex]));
+          nextIndex += 1;
+        }
+      };
+
+      fillQueue();
+
+      while (inflight.length > 0) {
+        const chunk = await inflight.shift()!;
         if (!output.writable) break;
-        output.write(await this.downloadSegment(segUrl));
+        output.write(chunk);
+        fillQueue();
       }
       output.end();
     } catch (err) {

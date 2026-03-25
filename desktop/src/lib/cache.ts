@@ -31,6 +31,10 @@ async function filePath(urn: string): Promise<string> {
   return await join(dir, urnToFilename(urn));
 }
 
+export async function getCacheTargetPath(urn: string): Promise<string> {
+  return await filePath(urn);
+}
+
 export async function isCached(urn: string): Promise<boolean> {
   try {
     const path = await filePath(urn);

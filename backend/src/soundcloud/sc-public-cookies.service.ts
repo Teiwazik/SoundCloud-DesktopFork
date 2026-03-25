@@ -2,6 +2,7 @@ import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
+import { OAuthAppsService } from '../oauth-apps/oauth-apps.service.js';
 import { ScPublicAnonService } from './sc-public-anon.service.js';
 import {
   extractCookieHydrationData,
@@ -17,16 +18,23 @@ export class ScPublicCookiesService {
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36';
   private static readonly ORIGIN = 'https://soundcloud.com';
   private static readonly REFERER = 'https://soundcloud.com/';
+  private static readonly FAILURE_THRESHOLD = 3;
+  private static readonly ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 
   private readonly logger = new Logger(ScPublicCookiesService.name);
   private readonly streamProxyUrl: string;
   private readonly cookies: string;
   private readonly oauthToken: string | null;
+  private consecutiveFailures = 0;
+  private degraded = false;
+  private lastAlertAt = 0;
+  private lastFailureReason = '';
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
     private readonly scPublicAnon: ScPublicAnonService,
+    private readonly oauthAppsService: OAuthAppsService,
   ) {
     this.streamProxyUrl = this.configService.get<string>('soundcloud.streamProxyUrl') ?? '';
     this.cookies = this.configService.get<string>('soundcloud.cookies') ?? '';
@@ -50,13 +58,21 @@ export class ScPublicCookiesService {
     }
 
     const hydration = await this.fetchHydrationSound(track.permalink_url);
-    if (!hydration?.sound) return null;
+    if (!hydration) {
+      return null;
+    }
+    if (!hydration.sound) {
+      await this.recordFailure('hydration_missing_sound', trackUrn);
+      return null;
+    }
     if (!hydration.clientId) {
       this.logger.warn(`cookie stream hydration has no client_id for track ${trackId}`);
+      await this.recordFailure('hydration_missing_client_id', trackUrn);
       return null;
     }
     if (!this.oauthToken) {
       this.logger.warn('cookie stream oauth_token cookie is missing');
+      await this.recordFailure('missing_oauth_token_cookie', trackUrn);
       return null;
     }
 
@@ -78,8 +94,9 @@ export class ScPublicCookiesService {
     for (const transcoding of ordered) {
       try {
         const streamUrl = await this.resolveEncryptedTranscoding(transcoding.url, trackAuth, hydration.clientId);
-
-        return await this.scPublicAnon.streamFromHls(streamUrl, transcoding.format.mime_type);
+        const result = await this.scPublicAnon.streamFromHls(streamUrl, transcoding.format.mime_type);
+        await this.recordSuccess();
+        return result;
       } catch (err: any) {
         this.logger.warn(
           `Cookie stream ${transcoding.preset} failed: ${err.message}`,
@@ -87,6 +104,7 @@ export class ScPublicCookiesService {
       }
     }
 
+    await this.recordFailure('all_cookie_transcodings_failed', trackUrn);
     return null;
   }
 
@@ -104,8 +122,66 @@ export class ScPublicCookiesService {
       return extractCookieHydrationData(html);
     } catch (err: any) {
       this.logger.warn(`Failed to fetch track page: ${err.message}`);
+      await this.recordFailure('track_page_fetch_failed', permalinkUrl, err.message);
       return null;
     }
+  }
+
+  private async recordFailure(reason: string, subject: string, details?: string): Promise<void> {
+    if (!this.cookies) return;
+
+    this.consecutiveFailures += 1;
+    this.lastFailureReason = reason;
+
+    if (this.consecutiveFailures < ScPublicCookiesService.FAILURE_THRESHOLD) {
+      return;
+    }
+
+    const now = Date.now();
+    if (this.degraded && now - this.lastAlertAt < ScPublicCookiesService.ALERT_COOLDOWN_MS) {
+      return;
+    }
+
+    this.degraded = true;
+    this.lastAlertAt = now;
+
+    const detailsSuffix = details ? `\nDetails: <code>${this.escapeHtml(details.slice(0, 300))}</code>` : '';
+    await this.oauthAppsService.notify(
+      `⚠️ <b>Cookie stream degraded</b>\n\n` +
+        `Reason: <code>${this.escapeHtml(reason)}</code>\n` +
+        `Consecutive failures: <b>${this.consecutiveFailures}</b>\n` +
+        `Last subject: <code>${this.escapeHtml(subject)}</code>` +
+        `${detailsSuffix}`,
+    );
+  }
+
+  private async recordSuccess(): Promise<void> {
+    if (!this.cookies) return;
+
+    const wasDegraded = this.degraded;
+    const previousFailures = this.consecutiveFailures;
+    const previousReason = this.lastFailureReason;
+
+    this.consecutiveFailures = 0;
+    this.lastFailureReason = '';
+    this.degraded = false;
+
+    if (!wasDegraded) {
+      return;
+    }
+
+    await this.oauthAppsService.notify(
+      `✅ <b>Cookie stream restored</b>\n\n` +
+        `Previous reason: <code>${this.escapeHtml(previousReason || 'unknown')}</code>\n` +
+        `Failures before recovery: <b>${previousFailures}</b>`,
+    );
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
   }
 
   private buildResolveHeaders(): Record<string, string> {
