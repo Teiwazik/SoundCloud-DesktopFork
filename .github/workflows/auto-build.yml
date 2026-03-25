@@ -183,12 +183,53 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
+      - name: Validate Tauri signing secrets
+        shell: bash
+        env:
+          RAW_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RAW_TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY secret"
+            exit 1
+          fi
+
+          if [ -z "${RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret"
+            exit 1
+          fi
+
+          key="$RAW_TAURI_SIGNING_PRIVATE_KEY"
+
+          if printf '%s' "$key" | grep -q '\\n'; then
+            key=$(printf '%b' "${key//\\n/\\n}")
+            echo "::notice::Normalized escaped newlines in TAURI_SIGNING_PRIVATE_KEY"
+          fi
+
+          if printf '%s' "$key" | grep -qi 'public key'; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY looks like a public key. Use the private key file without .pub"
+            exit 1
+          fi
+
+          if ! printf '%s' "$key" | grep -qi 'secret key'; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY does not contain 'secret key' marker; verify secret format"
+          fi
+
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<__TAURI_KEY__"
+            printf '%s\n' "$key"
+            echo "__TAURI_KEY__"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: desktop
           args: ${{ matrix.args }}
