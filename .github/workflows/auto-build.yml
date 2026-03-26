@@ -54,12 +54,14 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
-          LAST_TAG=$(git tag --sort=-v:refname | head -n1)
-          LAST_VERSION=${LAST_TAG#v}
-          LAST_VERSION=${LAST_VERSION:-0.0.0}
-
           cd desktop
-          npm version "$LAST_VERSION" --no-git-tag-version --allow-same-version
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if ! echo "$CURRENT_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid semantic version in desktop/package.json: $CURRENT_VERSION"
+            exit 1
+          fi
+
+          npm version "$CURRENT_VERSION" --no-git-tag-version --allow-same-version
           npm version "$RELEASE_TYPE" --no-git-tag-version
           NEW_VERSION=$(node -p "require('./package.json').version")
           cd ..
