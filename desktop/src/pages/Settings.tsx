@@ -632,11 +632,21 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
   const qdrantUrl = useSettingsStore((s) => s.qdrantUrl);
   const qdrantKey = useSettingsStore((s) => s.qdrantKey);
   const qdrantCollection = useSettingsStore((s) => s.qdrantCollection);
+  const regionalTrendSeed = useSettingsStore((s) => s.regionalTrendSeed);
+  const regionalTrendRegions = useSettingsStore((s) => s.regionalTrendRegions);
+  const llmRerankEnabled = useSettingsStore((s) => s.llmRerankEnabled);
+  const llmEndpoint = useSettingsStore((s) => s.llmEndpoint);
+  const llmModel = useSettingsStore((s) => s.llmModel);
   
   const setQdrantEnabled = useSettingsStore((s) => s.setQdrantEnabled);
   const setQdrantUrl = useSettingsStore((s) => s.setQdrantUrl);
   const setQdrantKey = useSettingsStore((s) => s.setQdrantKey);
   const setQdrantCollection = useSettingsStore((s) => s.setQdrantCollection);
+  const setRegionalTrendSeed = useSettingsStore((s) => s.setRegionalTrendSeed);
+  const setRegionalTrendRegions = useSettingsStore((s) => s.setRegionalTrendRegions);
+  const setLlmRerankEnabled = useSettingsStore((s) => s.setLlmRerankEnabled);
+  const setLlmEndpoint = useSettingsStore((s) => s.setLlmEndpoint);
+  const setLlmModel = useSettingsStore((s) => s.setLlmModel);
 
   const [open, setOpen] = useState(false);
 
@@ -666,7 +676,7 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <p className="text-[13px] text-white/70 font-medium">{t('settings.qdrantEnabled', 'Enable Recommendation Engine')}</p>
-              <p className="text-[11px] text-white/30">{t('settings.qdrantEnabledDesc', 'Use Qdrant for 72D vector search and mood analysis')}</p>
+              <p className="text-[11px] text-white/30">{t('settings.qdrantEnabledDesc', 'Use Qdrant for 96D vector search, spectral analysis and mood adaptation')}</p>
             </div>
             <button
               onClick={() => setQdrantEnabled(!qdrantEnabled)}
@@ -711,13 +721,100 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
                 type="text"
                 value={qdrantCollection}
                 onChange={(e) => setQdrantCollection(e.target.value)}
-                placeholder="sw_v1"
+                placeholder="sw_v2"
                 className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
               />
             </div>
+
+            <div className="border-t border-white/[0.05] pt-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-[13px] text-white/70 font-medium">
+                    {t('settings.regionalTrendSeed', 'Cross-platform regional trend seeding')}
+                  </p>
+                  <p className="text-[11px] text-white/30">
+                    {t('settings.regionalTrendSeedDesc', 'Parse Apple/Deezer charts by regions and blend into discovery pool')}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setRegionalTrendSeed(!regionalTrendSeed)}
+                  className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
+                    regionalTrendSeed ? 'bg-accent' : 'bg-white/10'
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
+                      regionalTrendSeed ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[12px] text-white/40 font-medium ml-1">
+                  {t('settings.regionalTrendRegions', 'Regions (ISO2, comma separated)')}
+                </label>
+                <input
+                  type="text"
+                  value={regionalTrendRegions}
+                  onChange={(e) => setRegionalTrendRegions(e.target.value)}
+                  placeholder="us,gb,de,fr,br,jp,kr,mx"
+                  className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="border-t border-white/[0.05] pt-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-[13px] text-white/70 font-medium">
+                    {t('settings.llmRerankEnabled', 'Enable LLM reranking')}
+                  </p>
+                  <p className="text-[11px] text-white/30">
+                    {t('settings.llmRerankEnabledDesc', 'Rerank recommendation candidates with a local LLM for better mood fit and diversity')}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setLlmRerankEnabled(!llmRerankEnabled)}
+                  className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
+                    llmRerankEnabled ? 'bg-accent' : 'bg-white/10'
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
+                      llmRerankEnabled ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className={`space-y-4 transition-opacity duration-300 ${!llmRerankEnabled ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+                <div className="space-y-1.5">
+                  <label className="text-[12px] text-white/40 font-medium ml-1">LLM Endpoint</label>
+                  <input
+                    type="text"
+                    value={llmEndpoint}
+                    onChange={(e) => setLlmEndpoint(e.target.value)}
+                    placeholder="http://127.0.0.1:11434"
+                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[12px] text-white/40 font-medium ml-1">LLM Model</label>
+                  <input
+                    type="text"
+                    value={llmModel}
+                    onChange={(e) => setLlmModel(e.target.value)}
+                    placeholder="qwen2.5:14b"
+                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
+                  />
+                </div>
+              </div>
+            </div>
             
             <p className="text-[11px] text-white/20 italic leading-relaxed">
-               {t('settings.qdrantNote', 'Note: You can use either Qdrant Cloud or a local Qdrant server. Tracks are vectorized locally and synced to the selected collection.')}
+               {t('settings.qdrantNote', 'Note: You can use either Qdrant Cloud or a local Qdrant server. Tracks are vectorized locally, enriched with spectral features, and synced to the selected collection.')}
             </p>
           </div>
         </div>

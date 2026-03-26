@@ -1,14 +1,23 @@
 import * as Slider from '@radix-ui/react-slider';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Sparkles } from 'lucide-react';
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { artworkPanelApi } from '../../components/music/LyricsPanel';
-import { useTranslation } from 'react-i18next';
-import { Sparkles } from 'lucide-react';
 import { api, getTrackComments } from '../../lib/api';
-import { getCurrentTime, getSmoothCurrentTime, getDuration, handlePrev, seek, subscribe } from '../../lib/audio';
+import {
+  getCurrentTime,
+  getDuration,
+  getSmoothCurrentTime,
+  handlePrev,
+  seek,
+  subscribe,
+} from '../../lib/audio';
+import { updateDiscordLyric } from '../../lib/discord';
 import { art, formatTime } from '../../lib/formatters';
 import { invalidateAllLikesCache } from '../../lib/hooks';
+import { useIsMobile } from '../../lib/hooks/useIsMobile';
 import {
   audioLines16,
   Ban,
@@ -26,24 +35,25 @@ import {
   volume2Icon16,
   volumeXIcon16,
 } from '../../lib/icons';
-import { updateDiscordLyric } from '../../lib/discord';
 import { optimisticToggleLike } from '../../lib/likes';
 import { searchLyrics } from '../../lib/lyrics';
-import { useLyricsStore } from '../../stores/lyrics';
-import { usePlayerStore, type Track } from '../../stores/player';
-import { useIsMobile } from '../../lib/hooks/useIsMobile';
 import { useDislikesStore } from '../../stores/dislikes';
+import { useArtworkStore, useLyricsStore } from '../../stores/lyrics';
+import { type Track, usePlayerStore } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
-import { useSoundWaveStore, type MoodLabel } from '../../stores/soundwave';
+import { type MoodLabel, useSoundWaveStore } from '../../stores/soundwave';
 import { EqualizerPanel } from '../music/EqualizerPanel';
+import { StreamQualityBadge } from '../music/StreamQualityBadge';
 import { Visualizer } from '../music/Visualizer';
 
 /* ── Progress Slider ─────────────────────────────────────────── */
 
 export const ProgressSlider = React.memo(() => {
   const duration = useSyncExternalStore(subscribe, getDuration);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
-  const { floatingComments, classicPlaybar } = useSettingsStore();
+  const floatingComments = useSettingsStore((s) => s.floatingComments);
+  const classicPlaybar = useSettingsStore((s) => s.classicPlaybar);
 
   const { data: comments } = useQuery({
     queryKey: ['comments', currentTrack?.urn],
@@ -57,19 +67,30 @@ export const ProgressSlider = React.memo(() => {
   const [syncedValue, setSyncedValue] = useState(0);
 
   const draggingRef = useRef(false);
-  const rangeRef = useRef<HTMLSpanElement>(null);
-  const thumbRef = useRef<HTMLSpanElement>(null);
+  const maskUrlRef = useRef<string | null>(null);
 
   // Waveform Mask Logic
   const [maskUri, setMaskUri] = useState<string>('');
   useEffect(() => {
     const url = currentTrack?.waveform_url;
+    const releaseMask = () => {
+      if (maskUrlRef.current) {
+        URL.revokeObjectURL(maskUrlRef.current);
+        maskUrlRef.current = null;
+      }
+    };
+
+    releaseMask();
+
     if (!url) {
       setMaskUri('');
       return;
     }
+
+    const controller = new AbortController();
+    let cancelled = false;
     const jsonUrl = url.replace(/\.[^.]+$/, '.json');
-    fetch(jsonUrl)
+    fetch(jsonUrl, { signal: controller.signal })
       .then(async (r) => {
         if (!r.ok) {
           throw new Error(`HTTP ${r.status}`);
@@ -82,16 +103,19 @@ export const ProgressSlider = React.memo(() => {
       })
       .then((d) => {
         if (!d || !d.samples) return;
-        const s = d.samples;
+        const s = d.samples as number[];
         const c = document.createElement('canvas');
-        const w = 1200;
+        const w = 720;
         const h = 40;
         c.width = w;
         c.height = h;
         const ctx = c.getContext('2d');
         if (!ctx) return;
         ctx.fillStyle = 'black';
-        const max = Math.max(...s) || 1;
+        let max = 1;
+        for (let i = 0; i < s.length; i++) {
+          if (s[i] > max) max = s[i];
+        }
         const barW = 2;
         const gap = 1.5;
         const step = barW + gap;
@@ -103,32 +127,57 @@ export const ProgressSlider = React.memo(() => {
           ctx.roundRect(i, (h - barH) / 2, barW, barH, 2);
           ctx.fill();
         }
-        setMaskUri(c.toDataURL());
+
+        c.toBlob((blob) => {
+          if (cancelled) return;
+          if (!blob) {
+            setMaskUri('');
+            return;
+          }
+          const next = URL.createObjectURL(blob);
+          if (maskUrlRef.current) URL.revokeObjectURL(maskUrlRef.current);
+          maskUrlRef.current = next;
+          setMaskUri(next);
+        }, 'image/png');
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        if (e instanceof DOMException && e.name === 'AbortError') return;
         console.warn('Waveform load failed', e);
         setMaskUri('');
       });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [currentTrack?.waveform_url]);
 
-  // Direct DOM updates at 60fps+ — zero React re-renders for the visual thumb
+  useEffect(() => {
+    return () => {
+      if (maskUrlRef.current) {
+        URL.revokeObjectURL(maskUrlRef.current);
+        maskUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  // Keep slider state in sync without competing DOM mutations
   useEffect(() => {
     let rafId: number;
+    let lastPaint = 0;
 
-    const loop = () => {
+    const loop = (ts: number) => {
       rafId = requestAnimationFrame(loop);
-      if (draggingRef.current) return;
-      const t = getSmoothCurrentTime();
-      const d = getDuration();
-      const pct = d > 0 ? (t / d) * 100 : 0;
-      if (rangeRef.current) rangeRef.current.style.right = `${100 - pct}%`;
-      const thumbWrapper = thumbRef.current?.parentElement;
-      if (thumbWrapper) thumbWrapper.style.left = `${pct}%`;
+      if (draggingRef.current || document.visibilityState === 'hidden' || !isPlaying) return;
+
+      if (ts - lastPaint < 33) return;
+      lastPaint = ts;
+
+      setSyncedValue(getSmoothCurrentTime());
     };
 
     rafId = requestAnimationFrame(loop);
-
-    // Keep React state loosely synced at 10Hz for proper Slider.Root prop mounting if it re-renders
     const unsub = subscribe(() => {
       if (!draggingRef.current) {
         setSyncedValue(getCurrentTime());
@@ -139,7 +188,7 @@ export const ProgressSlider = React.memo(() => {
       cancelAnimationFrame(rafId);
       unsub();
     };
-  }, []);
+  }, [isPlaying]);
 
   const displayValue = dragging ? dragValue : syncedValue;
 
@@ -187,25 +236,27 @@ export const ProgressSlider = React.memo(() => {
         onValueChange={onValueChange}
         onValueCommit={onValueCommit}
       >
-        <Slider.Track 
+        <Slider.Track
           className={`relative grow transition-all duration-150 overflow-hidden ${maskUri && !classicPlaybar ? 'h-full' : 'h-[3px] rounded-full group-hover/slider:h-[5px]'}`}
-          style={maskUri && !classicPlaybar ? { 
-            maskImage: `url(${maskUri})`, maskSize: '100% 100%', 
-            WebkitMaskImage: `url(${maskUri})`, WebkitMaskSize: '100% 100%' 
-          } : undefined}
+          style={
+            maskUri && !classicPlaybar
+              ? {
+                  maskImage: `url(${maskUri})`,
+                  maskSize: '100% 100%',
+                  WebkitMaskImage: `url(${maskUri})`,
+                  WebkitMaskSize: '100% 100%',
+                }
+              : undefined
+          }
         >
           <div className="absolute inset-0 bg-white/[0.08]" />
           <Slider.Range
-            ref={rangeRef}
             className={`absolute h-full will-change-transform ${maskUri ? 'bg-accent/90' : 'bg-accent rounded-full'}`}
           />
           {markers}
         </Slider.Track>
         {(!maskUri || classicPlaybar) && (
-          <Slider.Thumb
-            ref={thumbRef}
-            className="block w-3 h-3 rounded-full bg-accent shadow-[0_0_10px_var(--color-accent-glow)] scale-0 opacity-0 group-hover/slider:scale-100 group-hover/slider:opacity-100 transition-all duration-150 outline-none will-change-transform"
-          />
+          <Slider.Thumb className="block w-3 h-3 rounded-full bg-accent shadow-[0_0_10px_var(--color-accent-glow)] scale-0 opacity-0 group-hover/slider:scale-100 group-hover/slider:opacity-100 transition-all duration-150 outline-none will-change-transform" />
         )}
       </Slider.Root>
     </div>
@@ -383,7 +434,9 @@ function DislikeButton({ trackUrn }: { trackUrn: string }) {
       onClick={handleToggle}
       title={t('track.dislike', "Don't play this track")}
       className={`w-9 h-9 flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer hover:bg-white/[0.04] ${
-        isDisliked ? 'text-red-500 hover:text-red-400 opacity-100' : 'text-white/20 hover:text-red-400/80 opacity-0 group-hover/trackinfo:opacity-100'
+        isDisliked
+          ? 'text-red-500 hover:text-red-400 opacity-100'
+          : 'text-white/20 hover:text-red-400/80 opacity-0 group-hover/trackinfo:opacity-100'
       }`}
     >
       <Ban size={14} />
@@ -409,6 +462,7 @@ function MoodCorrectionButton({ track }: { track: Track }) {
   const [sending, setSending] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset local mood UI only on track switch
   useEffect(() => {
     setOpen(false);
     setPendingMood(null);
@@ -471,7 +525,9 @@ function MoodCorrectionButton({ track }: { track: Track }) {
         }}
         title={t('track.moodCorrection', 'Correct mood')}
         className={`w-9 h-9 flex items-center justify-center transition-all duration-200 cursor-pointer hover:bg-white/[0.04] ${
-          open ? 'text-accent opacity-100' : 'text-white/20 hover:text-accent opacity-0 group-hover/trackinfo:opacity-100'
+          open
+            ? 'text-accent opacity-100'
+            : 'text-white/20 hover:text-accent opacity-0 group-hover/trackinfo:opacity-100'
         }`}
       >
         <Sparkles size={14} />
@@ -481,7 +537,9 @@ function MoodCorrectionButton({ track }: { track: Track }) {
         <div className="absolute left-full top-1/2 z-40 ml-2 w-[240px] -translate-y-1/2 rounded-2xl border border-white/10 bg-[#121214] p-3 shadow-2xl shadow-black/60">
           {!pendingMood ? (
             <div className="space-y-2">
-              <p className="text-[11px] font-semibold text-white/50">{t('track.moodChoose', 'Choose the correct mood')}</p>
+              <p className="text-[11px] font-semibold text-white/50">
+                {t('track.moodChoose', 'Choose the correct mood')}
+              </p>
               <div className="grid grid-cols-2 gap-2">
                 {MOOD_OPTIONS.map((option) => (
                   <button
@@ -498,9 +556,16 @@ function MoodCorrectionButton({ track }: { track: Track }) {
           ) : (
             <div className="space-y-2.5">
               <p className="text-[11px] font-semibold text-white/80">
-                {t('track.moodConfirmPrompt', { mood: t(MOOD_OPTIONS.find((option) => option.mood === pendingMood)?.key || 'track.moodEnergetic') })}
+                {t('track.moodConfirmPrompt', {
+                  mood: t(
+                    MOOD_OPTIONS.find((option) => option.mood === pendingMood)?.key ||
+                      'track.moodEnergetic',
+                  ),
+                })}
               </p>
-              <p className="text-[10px] text-white/45">{t('track.moodConfirmHint', 'This will train SoundWave recommendations.')}</p>
+              <p className="text-[10px] text-white/45">
+                {t('track.moodConfirmHint', 'This will train SoundWave recommendations.')}
+              </p>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -649,6 +714,9 @@ const TrackInfo = React.memo(() => {
         </div>
       </div>
       <div className="min-w-0 flex-1">
+        <div className="mb-1 flex items-center">
+          <StreamQualityBadge quality={currentTrack.streamQuality} access={currentTrack.access} />
+        </div>
         <div className="flex items-center gap-1.5 min-w-0">
           <p
             className="text-[13px] text-white/90 truncate font-medium cursor-pointer hover:text-white leading-tight transition-colors"
@@ -706,7 +774,7 @@ const PlaybarVisualizer = React.memo(() => {
   const h = useSettingsStore((s) => s.visualizerHeight);
   const op = useSettingsStore((s) => s.visualizerOpacity);
   const fade = useSettingsStore((s) => s.visualizerFade);
-  
+
   return (
     <div
       className="absolute pointer-events-none z-[5] overflow-visible"
@@ -729,7 +797,7 @@ const PlaybarVisualizer = React.memo(() => {
 
 const DiscordLyricsSyncer = React.memo(() => {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
-  
+
   const { data: lyrics } = useQuery({
     queryKey: ['lyrics', currentTrack?.urn, currentTrack?.user.username, currentTrack?.title],
     queryFn: () => searchLyrics(currentTrack!.user.username, currentTrack!.title),
@@ -746,17 +814,17 @@ const DiscordLyricsSyncer = React.memo(() => {
     const unsub = subscribe(() => {
       const t = getCurrentTime();
       let activeText: string | null = null;
-      
+
       for (let i = lyrics.synced!.length - 1; i >= 0; i--) {
         if (t >= lyrics.synced![i].time) {
           activeText = lyrics.synced![i].text;
           break;
         }
       }
-      
+
       updateDiscordLyric(activeText);
     });
-    
+
     return unsub;
   }, [lyrics]);
 
@@ -770,17 +838,23 @@ export const NowPlayingBar = React.memo(
     const isMobile = useIsMobile();
     const isPlaying = usePlayerStore((s) => s.isPlaying);
     const togglePlay = usePlayerStore((s) => s.togglePlay);
+    const lyricsOpen = useLyricsStore((s) => s.open);
+    const artworkOpen = useArtworkStore((s) => s.open);
+    const visualizerPlaybar = useSettingsStore((s) => s.visualizerPlaybar);
+    const isFullscreenOverlayOpen = lyricsOpen || artworkOpen;
 
     return (
       <div className={`shrink-0 relative group/trackinfo ${isMobile ? 'h-[72px]' : ''}`}>
         <DiscordLyricsSyncer />
-        <BackgroundGlow />
-        
-        {useSettingsStore((s) => s.visualizerPlaybar) && !isMobile && <PlaybarVisualizer />}
+        {!isFullscreenOverlayOpen && <BackgroundGlow />}
+
+        {visualizerPlaybar && !isMobile && !isFullscreenOverlayOpen && <PlaybarVisualizer />}
 
         <div className="relative z-10" style={{ isolation: 'isolate' }}>
           {!isMobile && <ProgressSlider />}
-          <div className={`${isMobile ? 'h-[72px]' : 'h-[76px]'} flex items-center px-5 gap-3 relative`}>
+          <div
+            className={`${isMobile ? 'h-[72px]' : 'h-[76px]'} flex items-center px-5 gap-3 relative`}
+          >
             {/* Left: track info */}
             <div className="w-[320px] min-w-0">
               <TrackInfo />

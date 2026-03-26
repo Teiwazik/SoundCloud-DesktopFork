@@ -15,7 +15,9 @@
     "clearQueue": "Clear Queue",
     "addToQueue": "Add to Queue",
     "shuffle": "Shuffle",
-    "repeat": "Repeat"
+    "repeat": "Repeat",
+    "streamQualityHq": "HQ",
+    "streamQualityLq": "LQ"
   },
   "auth": {
     "signIn": "Sign in with SoundCloud",
@@ -200,8 +202,13 @@
     "importYandex": "Import from Yandex Music",
     "requiresRestart": "Requires app restart",
     "qdrantEnabled": "Enable Recommendation Engine",
-    "qdrantEnabledDesc": "Use Qdrant for 72D vector search and mood analysis",
-    "qdrantNote": "Note: You can use either Qdrant Cloud or a local Qdrant server. Tracks are vectorized locally and synced to the selected collection."
+    "qdrantEnabledDesc": "Use Qdrant for 96D vector search, spectral analysis and mood adaptation",
+    "qdrantNote": "Note: You can use either Qdrant Cloud or a local Qdrant server. Tracks are vectorized locally, enriched with spectral features, and synced to the selected collection.",
+    "regionalTrendSeed": "Cross-platform regional trend seeding",
+    "regionalTrendSeedDesc": "Parse Apple/Deezer charts by regions and blend into discovery pool",
+    "regionalTrendRegions": "Regions (ISO2, comma separated)",
+    "llmRerankEnabled": "Enable LLM reranking",
+    "llmRerankEnabledDesc": "Rerank recommendation candidates with a local LLM for better mood fit and diversity"
   },
   "eq": {
     "title": "Equalizer",

@@ -74,6 +74,11 @@ export interface SettingsState {
   qdrantUrl: string;
   qdrantKey: string;
   qdrantCollection: string;
+  regionalTrendSeed: boolean;
+  regionalTrendRegions: string;
+  llmRerankEnabled: boolean;
+  llmEndpoint: string;
+  llmModel: string;
   visualizerStyle: 'Off' | 'Bars' | 'Wave' | 'Pulse';
   visualizerPlaybar: boolean;
   visualizerFullscreen: boolean;
@@ -121,6 +126,11 @@ export interface SettingsState {
   setQdrantUrl: (v: string) => void;
   setQdrantKey: (v: string) => void;
   setQdrantCollection: (v: string) => void;
+  setRegionalTrendSeed: (v: boolean) => void;
+  setRegionalTrendRegions: (v: string) => void;
+  setLlmRerankEnabled: (v: boolean) => void;
+  setLlmEndpoint: (v: string) => void;
+  setLlmModel: (v: string) => void;
   setVisualizerStyle: (style: 'Off' | 'Bars' | 'Wave' | 'Pulse') => void;
   setVisualizerPlaybar: (v: boolean) => void;
   setVisualizerFullscreen: (v: boolean) => void;
@@ -148,11 +158,18 @@ const DEFAULT_EQ_GAINS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 const ENV_QDRANT_URL = import.meta.env.VITE_QDRANT_URL?.trim() || '';
 const ENV_QDRANT_KEY = import.meta.env.VITE_QDRANT_API_KEY?.trim() || '';
-const ENV_QDRANT_COLLECTION = import.meta.env.VITE_QDRANT_COLLECTION?.trim() || 'sw_v1';
+const ENV_QDRANT_COLLECTION = import.meta.env.VITE_QDRANT_COLLECTION?.trim() || 'sw_v2';
 const ENV_QDRANT_ENABLED_RAW = import.meta.env.VITE_QDRANT_ENABLED;
 const ENV_QDRANT_ENABLED = ENV_QDRANT_ENABLED_RAW
   ? ['1', 'true', 'yes', 'on'].includes(ENV_QDRANT_ENABLED_RAW.toLowerCase())
   : Boolean(ENV_QDRANT_URL);
+const ENV_REGIONAL_TREND_SEED =
+  (import.meta.env.VITE_SW_REGIONAL_TRENDS || '').toLowerCase() === 'true';
+const ENV_REGIONAL_TREND_REGIONS =
+  import.meta.env.VITE_SW_REGIONAL_TREND_REGIONS?.trim() || 'us,gb,de,fr,br,jp,kr,mx';
+const ENV_LLM_RERANK = (import.meta.env.VITE_SW_LLM_RERANK || '').toLowerCase() === 'true';
+const ENV_LLM_ENDPOINT = import.meta.env.VITE_SW_LLM_ENDPOINT?.trim() || 'http://127.0.0.1:11434';
+const ENV_LLM_MODEL = import.meta.env.VITE_SW_LLM_MODEL?.trim() || 'qwen2.5:14b';
 
 const DEFAULTS = {
   accentColor: '#ff5500',
@@ -181,6 +198,11 @@ const DEFAULTS = {
   qdrantUrl: ENV_QDRANT_URL,
   qdrantKey: ENV_QDRANT_KEY,
   qdrantCollection: ENV_QDRANT_COLLECTION,
+  regionalTrendSeed: ENV_REGIONAL_TREND_SEED,
+  regionalTrendRegions: ENV_REGIONAL_TREND_REGIONS,
+  llmRerankEnabled: ENV_LLM_RERANK,
+  llmEndpoint: ENV_LLM_ENDPOINT,
+  llmModel: ENV_LLM_MODEL,
   visualizerStyle: 'Wave' as const,
   visualizerPlaybar: true,
   visualizerFullscreen: false,
@@ -257,6 +279,11 @@ export const useSettingsStore = create<SettingsState>()(
       setQdrantUrl: (qdrantUrl) => set({ qdrantUrl }),
       setQdrantKey: (qdrantKey) => set({ qdrantKey }),
       setQdrantCollection: (qdrantCollection) => set({ qdrantCollection }),
+      setRegionalTrendSeed: (regionalTrendSeed) => set({ regionalTrendSeed }),
+      setRegionalTrendRegions: (regionalTrendRegions) => set({ regionalTrendRegions }),
+      setLlmRerankEnabled: (llmRerankEnabled) => set({ llmRerankEnabled }),
+      setLlmEndpoint: (llmEndpoint) => set({ llmEndpoint }),
+      setLlmModel: (llmModel) => set({ llmModel }),
       setVisualizerStyle: (visualizerStyle) => set({ visualizerStyle }),
       setVisualizerPlaybar: (visualizerPlaybar) => set({ visualizerPlaybar }),
       setVisualizerFullscreen: (visualizerFullscreen) => set({ visualizerFullscreen }),
@@ -288,7 +315,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'sc-settings',
       storage: createJSONStorage(() => tauriStorage),
-      version: 8,
+      version: 9,
       migrate: (persistedState) => {
         const state = (persistedState && typeof persistedState === 'object'
           ? persistedState
@@ -325,6 +352,11 @@ export const useSettingsStore = create<SettingsState>()(
         qdrantUrl: s.qdrantUrl,
         qdrantKey: s.qdrantKey,
         qdrantCollection: s.qdrantCollection,
+        regionalTrendSeed: s.regionalTrendSeed,
+        regionalTrendRegions: s.regionalTrendRegions,
+        llmRerankEnabled: s.llmRerankEnabled,
+        llmEndpoint: s.llmEndpoint,
+        llmModel: s.llmModel,
         targetFramerate: s.targetFramerate,
         unlockFramerate: s.unlockFramerate,
         showFpsCounter: s.showFpsCounter,

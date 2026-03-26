@@ -23,6 +23,7 @@ export interface Track {
   user_favorite?: boolean;
   bpm?: number;
   access?: 'playable' | 'preview' | 'blocked';
+  streamQuality?: 'hq' | 'lq';
   user: {
     id: number;
     urn: string;
@@ -70,6 +71,7 @@ interface PlayerState {
   toggleShuffle: () => void;
   toggleRepeat: () => void;
   setCurrentTrackAccess: (access: Track['access']) => void;
+  setCurrentTrackStreamQuality: (quality: Track['streamQuality']) => void;
 }
 
 export const usePlayerStore = create<PlayerState>()(
@@ -187,11 +189,11 @@ export const usePlayerStore = create<PlayerState>()(
           const track = queue[prevIdx];
           const isDisliked = useDislikesStore.getState().dislikedTrackUrns.includes(track.urn);
           if (!isDisliked) break;
-          
+
           prevIdx--;
           attempts++;
         }
-        
+
         prevIdx = Math.max(0, prevIdx);
 
         set({
@@ -307,15 +309,17 @@ export const usePlayerStore = create<PlayerState>()(
 
       setCurrentTrackAccess: (access) =>
         set((s) => (s.currentTrack ? { currentTrack: { ...s.currentTrack, access } } : {})),
+      setCurrentTrackStreamQuality: (streamQuality) =>
+        set((s) => (s.currentTrack ? { currentTrack: { ...s.currentTrack, streamQuality } } : {})),
     }),
     {
       name: 'sc-player',
       storage: createJSONStorage(() => tauriStorage),
       version: 3,
       migrate: (persistedState) => {
-        const state = (persistedState && typeof persistedState === 'object'
-          ? persistedState
-          : {}) as Partial<PlayerState>;
+        const state = (
+          persistedState && typeof persistedState === 'object' ? persistedState : {}
+        ) as Partial<PlayerState>;
         return state;
       },
       partialize: (state) => ({

@@ -9,6 +9,11 @@ export interface AudioFeatures {
   valence: number;
   arousal: number;
   bpm: number;
+  spectralContrast?: number;
+  subBass?: number;
+  midPresence?: number;
+  dynamicRange?: number;
+  rhythmicStability?: number;
 }
 
 interface Snapshot {
@@ -17,6 +22,11 @@ interface Snapshot {
   flatness: number;
   rolloff: number;
   flux: number;
+  spectralContrast: number;
+  subBass: number;
+  midPresence: number;
+  dynamicRange: number;
+  rhythmicStability: number;
 }
 
 class AudioAnalyserService {
@@ -26,7 +36,18 @@ class AudioAnalyserService {
   private history: Snapshot[] = [];
   private trackUrn: string | null = null;
   private trackFrames = 0;
-  private trackAccumulator: Snapshot = { energy: 0, centroid: 0, flatness: 0, rolloff: 0, flux: 0 };
+  private trackAccumulator: Snapshot = {
+    energy: 0,
+    centroid: 0,
+    flatness: 0,
+    rolloff: 0,
+    flux: 0,
+    spectralContrast: 0,
+    subBass: 0,
+    midPresence: 0,
+    dynamicRange: 0,
+    rhythmicStability: 0,
+  };
   private cache = new Map<string, AudioFeatures>();
 
   // Onset detection for BPM
@@ -46,7 +67,18 @@ class AudioAnalyserService {
     }
     this.trackUrn = urn;
     this.trackFrames = 0;
-    this.trackAccumulator = { energy: 0, centroid: 0, flatness: 0, rolloff: 0, flux: 0 };
+    this.trackAccumulator = {
+      energy: 0,
+      centroid: 0,
+      flatness: 0,
+      rolloff: 0,
+      flux: 0,
+      spectralContrast: 0,
+      subBass: 0,
+      midPresence: 0,
+      dynamicRange: 0,
+      rhythmicStability: 0,
+    };
     this.onsets = [];
     this.fluxHistory = [];
   }
@@ -92,7 +124,46 @@ class AudioAnalyserService {
     flux = Math.sqrt(flux / 64);
     this.prevBins.set(bins);
 
-    const snapshot: Snapshot = { energy, centroid, flatness, rolloff, flux };
+    let lowEnergy = 0;
+    let midEnergy = 0;
+    let highEnergy = 0;
+    let maxBin = 0;
+    let minBin = 1;
+    let sumSq = 0;
+
+    for (let i = 0; i < 64; i++) {
+      const val = bins[i] / 255;
+      sumSq += val * val;
+      if (val > maxBin) maxBin = val;
+      if (val < minBin) minBin = val;
+      if (i < 10) lowEnergy += val;
+      else if (i < 36) midEnergy += val;
+      else highEnergy += val;
+    }
+
+    const totalBandEnergy = lowEnergy + midEnergy + highEnergy;
+    const subBass = totalBandEnergy > 0 ? lowEnergy / totalBandEnergy : 0;
+    const midPresence = totalBandEnergy > 0 ? midEnergy / totalBandEnergy : 0;
+    const spectralContrast = (highEnergy + 1e-4) / (lowEnergy + 1e-4);
+    const meanBin = arithmeticMean / 64;
+    const variance = Math.max(0, sumSq / 64 - meanBin * meanBin);
+    const dynamicRange = Math.min(1, Math.sqrt(variance) * 2.5 + (maxBin - minBin) * 0.2);
+    const rhythmicStability = this.fluxHistory.length > 6
+      ? Math.max(0, 1 - Math.min(1, this.std(this.fluxHistory) * 8))
+      : 0.5;
+
+    const snapshot: Snapshot = {
+      energy,
+      centroid,
+      flatness,
+      rolloff,
+      flux,
+      spectralContrast: Math.min(1.5, spectralContrast),
+      subBass: Math.min(1, subBass),
+      midPresence: Math.min(1, midPresence),
+      dynamicRange,
+      rhythmicStability,
+    };
     this.currentSnapshot = snapshot;
 
     if (this.trackUrn) {
@@ -102,6 +173,11 @@ class AudioAnalyserService {
       this.trackAccumulator.flatness += flatness;
       this.trackAccumulator.rolloff += rolloff;
       this.trackAccumulator.flux += flux;
+      this.trackAccumulator.spectralContrast += snapshot.spectralContrast;
+      this.trackAccumulator.subBass += snapshot.subBass;
+      this.trackAccumulator.midPresence += snapshot.midPresence;
+      this.trackAccumulator.dynamicRange += snapshot.dynamicRange;
+      this.trackAccumulator.rhythmicStability += snapshot.rhythmicStability;
 
       // Pulse/Onset detection
       this.fluxHistory.push(flux);
@@ -133,6 +209,11 @@ class AudioAnalyserService {
       flatness: this.trackAccumulator.flatness / this.trackFrames,
       rolloff: this.trackAccumulator.rolloff / this.trackFrames,
       flux: this.trackAccumulator.flux / this.trackFrames,
+      spectralContrast: this.trackAccumulator.spectralContrast / this.trackFrames,
+      subBass: this.trackAccumulator.subBass / this.trackFrames,
+      midPresence: this.trackAccumulator.midPresence / this.trackFrames,
+      dynamicRange: this.trackAccumulator.dynamicRange / this.trackFrames,
+      rhythmicStability: this.trackAccumulator.rhythmicStability / this.trackFrames,
     };
 
     const { valence, arousal } = this.computeMood(avg);
@@ -146,7 +227,12 @@ class AudioAnalyserService {
       flux: avg.flux,
       valence,
       arousal,
-      bpm
+      bpm,
+      spectralContrast: avg.spectralContrast,
+      subBass: avg.subBass,
+      midPresence: avg.midPresence,
+      dynamicRange: avg.dynamicRange,
+      rhythmicStability: avg.rhythmicStability,
     };
 
     if (this.cache.has(this.trackUrn)) {
@@ -197,6 +283,19 @@ class AudioAnalyserService {
     return bpm;
   }
 
+  private std(values: number[]): number {
+    if (values.length === 0) return 0;
+    let mean = 0;
+    for (const v of values) mean += v;
+    mean /= values.length;
+    let varSum = 0;
+    for (const v of values) {
+      const d = v - mean;
+      varSum += d * d;
+    }
+    return Math.sqrt(varSum / values.length);
+  }
+
   getFeatures(urn: string): AudioFeatures | null {
     return this.cache.get(urn) || null;
   }
@@ -214,6 +313,11 @@ class AudioAnalyserService {
       valence,
       arousal,
       bpm: this.calculateBPM(),
+      spectralContrast: s.spectralContrast,
+      subBass: s.subBass,
+      midPresence: s.midPresence,
+      dynamicRange: s.dynamicRange,
+      rhythmicStability: s.rhythmicStability,
     };
   }
 }

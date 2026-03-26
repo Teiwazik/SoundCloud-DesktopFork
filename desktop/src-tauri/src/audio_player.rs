@@ -34,6 +34,7 @@ const NORMALIZATION_MAX_BOOST_DB: f64 = 9.0;
 const NORMALIZATION_MAX_ATTENUATION_DB: f64 = -8.0;
 const NORMALIZATION_CACHE_VERSION: u8 = 2;
 const MAX_SEEK_FALLBACK_SOURCE_BYTES: usize = 12 * 1024 * 1024;
+const CROSSFADE_HEADROOM: f32 = 0.88;
 
 type ChannelCount = NonZero<u16>;
 type SampleRate = NonZero<u32>;
@@ -549,7 +550,7 @@ fn create_player_from_bytes(
     vis_tx: Option<std::sync::mpsc::SyncSender<Vec<f32>>>,
 ) -> Result<(Player, Option<f64>), String> {
     let player = Player::connect_new(mixer);
-    player.set_volume((volume * normalization_gain).clamp(0.0, 2.0));
+    player.set_volume(volume.clamp(0.0, 2.0));
 
     let duration;
     if let Ok(source) = Decoder::new(Cursor::new(bytes.to_vec())) {
@@ -952,13 +953,8 @@ fn volume_to_rodio(v: f64) -> f32 {
     (v / 100.0).min(2.0).max(0.0) as f32
 }
 
-fn effective_output_volume(state: &AudioState, base_volume: f32) -> f32 {
-    let gain = if state.normalization_enabled.load(Ordering::Relaxed) {
-        *state.normalization_gain.lock().unwrap()
-    } else {
-        1.0
-    };
-    (base_volume * gain).clamp(0.0, 2.0)
+fn effective_output_volume(_state: &AudioState, base_volume: f32) -> f32 {
+    base_volume.clamp(0.0, 2.0)
 }
 
 fn store_seek_fallback_bytes(state: &AudioState, bytes: Vec<u8>) {
@@ -1029,21 +1025,25 @@ pub fn audio_load_file(
                 new_player.set_volume(0.0);
                 *cf_lock = Some(old_player.clone());
                 
-                let cf_player = old_player;
+                let cf_player = old_player.clone();
                 let np_player = new_player.clone();
                 let steps = (cf_duration * 1000.0 / 20.0) as u32;
                 if steps > 0 {
                     std::thread::spawn(move || {
-                        let vol_step = effective_vol / (steps as f32);
+                        let target = (effective_vol * CROSSFADE_HEADROOM).clamp(0.0, 2.0);
                         for i in 0..=steps {
-                            let np_v = vol_step * (i as f32);
-                            let cf_v = (effective_vol - np_v).max(0.0);
+                            let t = (i as f32) / (steps as f32);
+                            let np_v = (t * t * target).clamp(0.0, 2.0);
+                            let cf_v = ((1.0 - t * t) * target).clamp(0.0, 2.0);
                             np_player.set_volume(np_v);
                             cf_player.set_volume(cf_v);
                             std::thread::sleep(Duration::from_millis(20));
                         }
                         cf_player.stop();
                     });
+                } else {
+                    new_player.set_volume(effective_vol.clamp(0.0, 2.0));
+                    old_player.stop();
                 }
             } else {
                 old_player.stop();
@@ -1061,12 +1061,16 @@ pub fn audio_load_file(
     state.ended_notified.store(false, Ordering::Relaxed);
     state.device_error.store(false, Ordering::Relaxed);
 
-    Ok(AudioLoadResult { duration_secs })
+    Ok(AudioLoadResult {
+        duration_secs,
+        stream_quality: None,
+    })
 }
 
 #[derive(serde::Serialize)]
 pub struct AudioLoadResult {
     pub duration_secs: Option<f64>,
+    pub stream_quality: Option<String>,
 }
 
 /// Load and play audio from a URL (downloads fully, optionally caches).
@@ -1092,9 +1096,18 @@ pub async fn audio_load_url(
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
+    let stream_quality = resp
+        .headers()
+        .get("x-stream-quality")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_ascii_lowercase())
+        .filter(|v| v == "hq" || v == "lq");
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
 
-    let empty_result = AudioLoadResult { duration_secs: None };
+    let empty_result = AudioLoadResult {
+        duration_secs: None,
+        stream_quality: None,
+    };
 
     // Stale check after download — another track may have started loading
     if state.load_gen.load(Ordering::Relaxed) != gen {
@@ -1158,21 +1171,25 @@ pub async fn audio_load_url(
                 new_player.set_volume(0.0);
                 *cf_lock = Some(old_player.clone());
                 
-                let cf_player = old_player;
+                let cf_player = old_player.clone();
                 let np_player = new_player.clone();
                 let steps = (cf_duration * 1000.0 / 20.0) as u32;
                 if steps > 0 {
                     std::thread::spawn(move || {
-                        let vol_step = effective_vol / (steps as f32);
+                        let target = (effective_vol * CROSSFADE_HEADROOM).clamp(0.0, 2.0);
                         for i in 0..=steps {
-                            let np_v = vol_step * (i as f32);
-                            let cf_v = (effective_vol - np_v).max(0.0);
+                            let t = (i as f32) / (steps as f32);
+                            let np_v = (t * t * target).clamp(0.0, 2.0);
+                            let cf_v = ((1.0 - t * t) * target).clamp(0.0, 2.0);
                             np_player.set_volume(np_v);
                             cf_player.set_volume(cf_v);
                             std::thread::sleep(Duration::from_millis(20));
                         }
                         cf_player.stop();
                     });
+                } else {
+                    new_player.set_volume(effective_vol.clamp(0.0, 2.0));
+                    old_player.stop();
                 }
             } else {
                 old_player.stop();
@@ -1195,7 +1212,10 @@ pub async fn audio_load_url(
     state.ended_notified.store(false, Ordering::Relaxed);
     state.device_error.store(false, Ordering::Relaxed);
 
-    Ok(AudioLoadResult { duration_secs })
+    Ok(AudioLoadResult {
+        duration_secs,
+        stream_quality,
+    })
 }
 
 #[tauri::command]

@@ -104,7 +104,9 @@ export class TracksService {
       const urlKey = `${format}_url` as keyof typeof streams;
 
       const fallbackOrder: (keyof ScStreams)[] = [
-        'hls_aac_160_url', 'http_mp3_128_url', 'hls_mp3_128_url',
+        'hls_aac_160_url',
+        'http_mp3_128_url',
+        'hls_mp3_128_url',
       ];
 
       // Build ordered list: requested format first, then fallbacks
@@ -124,19 +126,23 @@ export class TracksService {
       for (const { key, url } of candidates) {
         const fmt = (key as string).replace('_url', '');
         const isHls = fmt.startsWith('hls_');
+        const quality = this.qualityFromStreamKey(key);
 
         try {
           if (isHls) {
-            return await streamFromHls(
+            const result = await streamFromHls(
               this.httpService,
               this.sc.scApiProxyUrl,
               url,
               this.hlsMimeType(fmt),
             );
+            return this.withStreamQuality(result, quality);
           }
-          return await this.proxyStream(token, url, range);
-        } catch (err: any) {
-          this.logger.warn(`Stream format ${fmt} failed: ${err.message}, trying next...`);
+          const result = await this.proxyStream(token, url, range);
+          return this.withStreamQuality(result, quality);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn(`Stream format ${fmt} failed: ${message}, trying next...`);
         }
       }
 
@@ -144,6 +150,23 @@ export class TracksService {
     } catch {
       return null;
     }
+  }
+
+  private qualityFromStreamKey(key: keyof ScStreams): 'hq' | 'lq' {
+    return key === 'hls_aac_160_url' ? 'hq' : 'lq';
+  }
+
+  private withStreamQuality(
+    result: { stream: Readable; headers: Record<string, string> },
+    quality: 'hq' | 'lq',
+  ): { stream: Readable; headers: Record<string, string> } {
+    return {
+      ...result,
+      headers: {
+        ...result.headers,
+        'x-stream-quality': quality,
+      },
+    };
   }
 
   private hlsMimeType(format: string): string {
@@ -161,8 +184,9 @@ export class TracksService {
         stream: Readable;
         headers: Record<string, string>;
       } | null;
-    } catch (err: any) {
-      this.logger.warn(`Cookie stream failed for ${trackUrn}: ${err.message}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Cookie stream failed for ${trackUrn}: ${message}`);
       return null;
     }
   }
@@ -170,15 +194,16 @@ export class TracksService {
   /**
    * Fallback: resolve stream via SoundCloud public API (no OAuth).
    * Used when the authenticated /streams endpoint fails or returns empty.
-  */
+   */
   async getPublicStream(
     trackUrn: string,
     format?: string,
   ): Promise<{ stream: Readable; headers: Record<string, string> } | null> {
     try {
       return await this.scPublicAnon.getStreamForTrack(trackUrn, format);
-    } catch (err: any) {
-      this.logger.warn(`Public API fallback failed for ${trackUrn}: ${err.message}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Public API fallback failed for ${trackUrn}: ${message}`);
       return null;
     }
   }

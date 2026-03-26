@@ -19,7 +19,7 @@ services:
       retries: 5
 
   app:
-    image: ghcr.io/zxcloli666/soundcloud-desktop/backend:latest
+    image: ghcr.io/teiwazik/soundcloud-desktopfork/backend:latest
     restart: always
     ports:
       - "3000:3000"
@@ -36,6 +36,7 @@ services:
       SC_PROXY_URL: ${SC_PROXY_URL:-}
       SC_STREAM_PROXY_URL: ${SC_STREAM_PROXY_URL:-}
       SC_COOKIES: ${SC_COOKIES:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy

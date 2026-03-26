@@ -104,9 +104,16 @@ export class ScPublicCookiesService {
           transcoding.format.mime_type,
         );
         await this.recordSuccess();
-        return result;
-      } catch (err: any) {
-        this.logger.warn(`Cookie stream ${transcoding.preset} failed: ${err.message}`);
+        return {
+          ...result,
+          headers: {
+            ...result.headers,
+            'x-stream-quality': transcoding.quality === 'hq' ? 'hq' : 'lq',
+          },
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Cookie stream ${transcoding.preset} failed: ${message}`);
       }
     }
 
@@ -125,9 +132,10 @@ export class ScPublicCookiesService {
       );
 
       return extractCookieHydrationData(html);
-    } catch (err: any) {
-      this.logger.warn(`Failed to fetch track page: ${err.message}`);
-      await this.recordFailure('track_page_fetch_failed', permalinkUrl, err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Failed to fetch track page: ${message}`);
+      await this.recordFailure('track_page_fetch_failed', permalinkUrl, message);
       return null;
     }
   }

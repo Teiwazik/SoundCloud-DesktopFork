@@ -1,5 +1,6 @@
 import { listen } from '@tauri-apps/api/event';
-import React, { useEffect, useRef } from 'react';
+import type React from 'react';
+import { useEffect, useRef } from 'react';
 import { useSettingsStore } from '../../stores/settings';
 
 export type VisualizerStyle = 'Off' | 'Bars' | 'Wave' | 'Pulse';
@@ -31,7 +32,12 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
   const vizBars = useSettingsStore((s) => s.visualizerBars);
 
   // Refs for hot-loop values (avoid re-creating effect)
-  const cfgRef = useRef({ smoothing: vizSmoothing, mirror: vizMirror, bars: vizBars, rgb: { r: 255, g: 255, b: 255 } });
+  const cfgRef = useRef({
+    smoothing: vizSmoothing,
+    mirror: vizMirror,
+    bars: vizBars,
+    rgb: { r: 255, g: 255, b: 255 },
+  });
   useEffect(() => {
     cfgRef.current.smoothing = vizSmoothing;
     cfgRef.current.mirror = vizMirror;
@@ -45,10 +51,17 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
     let isCancelled = false;
     let unlisten: (() => void) | null = null;
     let raf = 0;
+    let ctx: CanvasRenderingContext2D | null = null;
     // Single shared typed array for target bins — avoids GC churn
     const targetBins = new Float32Array(128);
     const smoothBins = new Float32Array(128);
-    let lastW = 0, lastH = 0;
+    let waveX = new Float32Array(0);
+    let waveY = new Float32Array(0);
+    let waveCap = 0;
+    let lastFrameTs = 0;
+    const frameBudgetMs = 1000 / 30;
+    let lastW = 0,
+      lastH = 0;
 
     const setup = async () => {
       const fn = await listen<number[]>('audio:visualizer', (ev) => {
@@ -65,11 +78,28 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
     };
     setup();
 
-    const draw = () => {
+    const draw = (ts: number) => {
+      if (document.visibilityState === 'hidden') {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+
+      if (ts - lastFrameTs < frameBudgetMs) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      lastFrameTs = ts;
+
       const canvas = canvasRef.current;
-      if (!canvas) { raf = requestAnimationFrame(draw); return; }
-      const ctx = canvas.getContext('2d', { alpha: true });
-      if (!ctx) { raf = requestAnimationFrame(draw); return; }
+      if (!canvas) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      if (!ctx) ctx = canvas.getContext('2d', { alpha: true });
+      if (!ctx) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
 
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -80,12 +110,18 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        lastW = w; lastH = h;
+        lastW = w;
+        lastH = h;
       } else {
         ctx.clearRect(0, 0, w, h);
       }
 
-      const { smoothing, mirror, bars: numBars, rgb: { r, g, b } } = cfgRef.current;
+      const {
+        smoothing,
+        mirror,
+        bars: numBars,
+        rgb: { r, g, b },
+      } = cfgRef.current;
       const lerp = smoothing / 100;
 
       // Resample 64 → numBars with lerp smoothing
@@ -101,11 +137,15 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         const freqWeight = 0.4 + 0.6 * (i / Math.max(1, numBars - 1));
         const damped = raw * freqWeight;
         // Exponential curve to boost the perceived quiet parts slightly
-        const target = Math.pow(damped / 255, 0.7) * 255;
+        const target = (damped / 255) ** 0.7 * 255;
         smoothBins[i] += (target - smoothBins[i]) * lerp;
       }
 
-      if (mirror) { ctx.save(); ctx.translate(w, 0); ctx.scale(-1, 1); }
+      if (mirror) {
+        ctx.save();
+        ctx.translate(w, 0);
+        ctx.scale(-1, 1);
+      }
 
       if (currentStyle === 'Bars') {
         const barW = w / numBars;
@@ -122,21 +162,27 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
           ctx.roundRect(i * barW, h - bh, aW, bh, [3, 3, 0, 0]);
           ctx.fill();
         }
-
       } else if (currentStyle === 'Wave') {
         // Build Catmull-Rom point array with virtual edge clamping
         const n = numBars;
         // Reuse a flat array: [x0,y0, x1,y1, ...] — (n+2) points including virtual edges
         const total = n + 2;
-        const px = new Float32Array(total);
-        const py = new Float32Array(total);
+        if (total > waveCap) {
+          waveCap = total;
+          waveX = new Float32Array(waveCap);
+          waveY = new Float32Array(waveCap);
+        }
+        const px = waveX;
+        const py = waveY;
         for (let i = 0; i < n; i++) {
           px[i + 1] = (i / (n - 1)) * w;
           py[i + 1] = h - (smoothBins[i] / 255) * h;
         }
         // Virtual endpoints for edge smoothness
-        px[0] = -px[1]; py[0] = py[1];
-        px[n + 1] = w + (w - px[n]); py[n + 1] = py[n];
+        px[0] = -px[1];
+        py[0] = py[1];
+        px[n + 1] = w + (w - px[n]);
+        py[n + 1] = py[n];
 
         const tension = 0.35;
         ctx.beginPath();
@@ -161,9 +207,9 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         ctx.fillStyle = grad;
         ctx.fill();
         // No bottom stroke — fill only for clean look
-
       } else if (currentStyle === 'Pulse') {
-        const cx = w / 2, cy = h / 2;
+        const cx = w / 2,
+          cy = h / 2;
         let sum = 0;
         const bc = Math.max(1, numBars >> 2);
         for (let i = 0; i < bc; i++) sum += smoothBins[i];
@@ -182,7 +228,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
       raf = requestAnimationFrame(draw);
     };
 
-    draw();
+    raf = requestAnimationFrame(draw);
     return () => {
       isCancelled = true;
       if (unlisten) unlisten();

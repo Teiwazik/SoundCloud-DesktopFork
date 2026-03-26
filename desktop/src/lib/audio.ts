@@ -3,16 +3,11 @@ import { listen } from '@tauri-apps/api/event';
 import type { Track } from '../stores/player';
 import { usePlayerStore } from '../stores/player';
 import { useSettingsStore } from '../stores/settings';
-import { api, getSessionId, streamUrl } from './api';
-import {
-  fetchAndCacheTrack,
-  getCacheFilePath,
-  getCacheTargetPath,
-  isCached,
-} from './cache';
-import { art } from './formatters';
-import { audioAnalyser } from './audio-analyser';
 import { useSoundWaveStore } from '../stores/soundwave';
+import { api, getSessionId, streamUrl } from './api';
+import { audioAnalyser } from './audio-analyser';
+import { fetchAndCacheTrack, getCacheFilePath, getCacheTargetPath, isCached } from './cache';
+import { art } from './formatters';
 
 /* ── Audio engine state ──────────────────────────────────────── */
 
@@ -25,8 +20,7 @@ let loadGen = 0;
 let lastTickAt = 0;
 let isCrossfadingOut = false;
 let crossfadeInProgress = false;
-// @ts-expect-error — used for stall detection interval
-let stallCheckTimer: ReturnType<typeof setInterval> | null = null; // eslint-disable-line
+let lastSmoothTime = 0;
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -43,11 +37,21 @@ export function getCurrentTime(): number {
 }
 
 export function getSmoothCurrentTime(): number {
-  if (!usePlayerStore.getState().isPlaying || !hasTrack) return cachedTime;
+  if (!usePlayerStore.getState().isPlaying || !hasTrack) {
+    lastSmoothTime = cachedTime;
+    return cachedTime;
+  }
   const now = Date.now();
   if (lastTickAt === 0 || now < lastTickAt) return cachedTime;
   const elapsed = (now - lastTickAt) / 1000;
-  return Math.min(cachedTime + elapsed, cachedTime + 1.0);
+  const raw = Math.min(cachedTime + elapsed, cachedTime + 1.0);
+
+  if (raw + 0.08 < lastSmoothTime && lastSmoothTime - raw < 1.25) {
+    return lastSmoothTime;
+  }
+
+  lastSmoothTime = raw;
+  return raw;
 }
 
 export function getDuration(): number {
@@ -58,6 +62,7 @@ export function seek(seconds: number) {
   if (!hasTrack) return;
   invoke('audio_seek', { position: seconds }).catch(console.error);
   cachedTime = seconds;
+  lastSmoothTime = seconds;
   lastTickAt = Date.now();
   notify();
   setTimeout(() => updateMediaPosition(), 150);
@@ -77,6 +82,7 @@ function stopTrack() {
   invoke('audio_stop').catch(console.error);
   hasTrack = false;
   cachedTime = 0;
+  lastSmoothTime = 0;
 }
 
 /** Reload the current track on new audio device, preserving position */
@@ -99,6 +105,8 @@ async function loadTrack(track: Track, skipStop = false) {
   fallbackDuration = track.duration / 1000;
   cachedDuration = fallbackDuration;
   cachedTime = 0;
+  lastSmoothTime = 0;
+  usePlayerStore.getState().setCurrentTrackStreamQuality(undefined);
   notify();
 
   // Sync EQ state to Rust
@@ -112,32 +120,50 @@ async function loadTrack(track: Track, skipStop = false) {
   // Try cached file first
   const cachedPath = await getCacheFilePath(urn);
   if (gen !== loadGen) return;
-  
+
   const settings = useSettingsStore.getState();
   const crossfadeSecs = settings.crossfadeEnabled ? settings.crossfadeDuration : null;
 
   try {
-    let result: { duration_secs: number | null };
+    let result: { duration_secs: number | null; stream_quality?: string | null };
     if (cachedPath) {
-        result = await invoke<{ duration_secs: number | null }>('audio_load_file', {
+      result = await invoke<{ duration_secs: number | null; stream_quality?: string | null }>(
+        'audio_load_file',
+        {
           path: cachedPath,
           cacheKey: urn,
-          crossfadeSecs
-        });
+          crossfadeSecs,
+        },
+      );
     } else {
-      result = await invoke<{ duration_secs: number | null }>('audio_load_url', {
-        url: streamUrl(urn),
-        sessionId: getSessionId(),
-        cachePath: await getCacheTargetPath(urn),
-        cacheKey: urn,
-        crossfadeSecs
-      });
+      result = await invoke<{ duration_secs: number | null; stream_quality?: string | null }>(
+        'audio_load_url',
+        {
+          url: streamUrl(urn),
+          sessionId: getSessionId(),
+          cachePath: await getCacheTargetPath(urn),
+          cacheKey: urn,
+          crossfadeSecs,
+        },
+      );
     }
+
+    const resolvedQuality =
+      result.stream_quality === 'hq' || result.stream_quality === 'lq'
+        ? result.stream_quality
+        : cachedPath
+          ? track.streamQuality || (useSettingsStore.getState().highQualityStreaming ? 'hq' : 'lq')
+          : useSettingsStore.getState().highQualityStreaming
+            ? 'hq'
+            : 'lq';
+    usePlayerStore.getState().setCurrentTrackStreamQuality(resolvedQuality);
+
     // Detect preview: real audio duration is much shorter than track metadata duration
     if (result.duration_secs != null && fallbackDuration > 0) {
       const ratio = result.duration_secs / fallbackDuration;
       if (ratio < 0.5) {
         usePlayerStore.getState().setCurrentTrackAccess('preview');
+        usePlayerStore.getState().setCurrentTrackStreamQuality('lq');
       }
     }
   } catch (e) {
@@ -236,7 +262,7 @@ const STALL_THRESHOLD_MS = 2000;
 const STALL_COOLDOWN_MS = 10000; // after a stall reload, wait 10s before detecting again
 let stallCooldownUntil = 0;
 let resumeGuardUntil = 0; // suppress stall detection right after visibility resume
-stallCheckTimer = setInterval(() => {
+setInterval(() => {
   if (!hasTrack || !lastTickAt) return;
   const { isPlaying } = usePlayerStore.getState();
   if (!isPlaying) return;

@@ -37,6 +37,7 @@ import { useSoundWaveStore } from '../../stores/soundwave';
 import { ProgressSlider, ProgressTime } from '../layout/NowPlayingBar';
 import { AddToPlaylistDialog } from './AddToPlaylistDialog';
 import { FloatingComments } from './FloatingComments';
+import { StreamQualityBadge } from './StreamQualityBadge';
 import { Visualizer } from './Visualizer';
 
 /* ── Source Badge ─────────────────────────────────────────── */
@@ -106,6 +107,7 @@ function extractColor(src: string): Promise<[number, number, number]> {
 const FullscreenBackground = React.memo(
   ({ artworkSrc, color }: { artworkSrc: string | null; color: [number, number, number] }) => {
     const [r, g, b] = color;
+    const visualizerFullscreen = useSettingsStore((s) => s.visualizerFullscreen);
     return (
       <div
         className="absolute inset-0 pointer-events-none"
@@ -115,7 +117,9 @@ const FullscreenBackground = React.memo(
           <img
             src={artworkSrc}
             alt=""
-            className="w-full h-full object-cover scale-[1.4] blur-[100px] opacity-25 saturate-[1.5]"
+            className="w-full h-full object-cover scale-[1.2] blur-[72px] opacity-20 saturate-[1.3]"
+            loading="eager"
+            decoding="async"
           />
         )}
         <div
@@ -127,7 +131,7 @@ const FullscreenBackground = React.memo(
             `,
           }}
         />
-        {useSettingsStore((s) => s.visualizerFullscreen) && <FullscreenVisualizer />}
+        {visualizerFullscreen && <FullscreenVisualizer />}
       </div>
     );
   },
@@ -464,9 +468,28 @@ function useArtworkColor(artworkUrl: string | null) {
 const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(-1);
+  const lastScrollTsRef = useRef(0);
   const linesRef = useRef(lines);
   const lineElsRef = useRef<HTMLElement[]>([]);
   linesRef.current = lines;
+
+  const findActiveIndex = (source: LyricLine[], time: number): number => {
+    let lo = 0;
+    let hi = source.length - 1;
+    let ans = -1;
+
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (source[mid].time <= time + 0.3) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    return ans;
+  };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: lines triggers DOM re-cache
   useEffect(() => {
@@ -483,13 +506,7 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
       const time = getCurrentTime();
       const currentLines = linesRef.current;
 
-      let idx = -1;
-      for (let i = currentLines.length - 1; i >= 0; i--) {
-        if (currentLines[i].time <= time + 0.3) {
-          idx = i;
-          break;
-        }
-      }
+      const idx = findActiveIndex(currentLines, time);
       if (idx === activeRef.current) return;
 
       const prev = activeRef.current;
@@ -503,7 +520,13 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
         lineEls[idx].dataset.state = 'active';
         const el = lineEls[idx];
         const top = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
-        container.scrollTo({ top, behavior: 'smooth' });
+        const now = performance.now();
+        if (now - lastScrollTsRef.current < 220 || prev === -1 || Math.abs(idx - prev) > 2) {
+          container.scrollTo({ top, behavior: 'auto' });
+        } else {
+          container.scrollTo({ top, behavior: 'smooth' });
+        }
+        lastScrollTsRef.current = now;
       }
 
       if (prev !== -1 && idx !== -1) {
@@ -515,7 +538,7 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
           if (lineEls[i].dataset.state !== state) lineEls[i].dataset.state = state;
         }
       }
-    }, 200);
+    }, 160);
 
     return () => clearInterval(timerId);
   }, [lines]);
@@ -577,6 +600,7 @@ export const LyricsPanel = React.memo(() => {
     retry: 1,
   });
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset editor state only on track switch
   useEffect(() => {
     setManualQuery(null);
     setIsEditing(false);
@@ -598,6 +622,14 @@ export const LyricsPanel = React.memo(() => {
   return (
     <div className="fixed inset-0 z-[60] flex flex-col overflow-hidden animate-fade-in-up bg-[#08080a]">
       <FullscreenBackground artworkSrc={artwork500} color={colorRef.current} />
+
+      <div className="absolute top-6 left-6 z-20 pointer-events-none">
+        <StreamQualityBadge
+          quality={track.streamQuality}
+          access={track.access}
+          className="backdrop-blur-sm"
+        />
+      </div>
 
       {/* Close */}
       <div className="relative z-10 flex justify-end px-6 pt-5 pb-2" data-tauri-drag-region>
@@ -740,7 +772,7 @@ export const ArtworkPanel = React.memo(() => {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open]);
+  }, [open, setOpen]);
 
   // Expose open/close
   useEffect(() => {
@@ -755,6 +787,14 @@ export const ArtworkPanel = React.memo(() => {
   return (
     <div className="fixed inset-0 z-[60] flex flex-col overflow-hidden animate-fade-in-up bg-[#08080a]">
       <FullscreenBackground artworkSrc={artwork500} color={colorRef.current} />
+
+      <div className="absolute top-6 left-6 z-20 pointer-events-none">
+        <StreamQualityBadge
+          quality={track.streamQuality}
+          access={track.access}
+          className="backdrop-blur-sm"
+        />
+      </div>
 
       {/* Close */}
       <div className="relative z-10 flex justify-end px-6 pt-5 pb-2" data-tauri-drag-region>

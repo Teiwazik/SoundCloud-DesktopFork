@@ -115,12 +115,13 @@ export class ScPublicAnonService {
       const transcoding = pickTranscoding(retryTranscodings, format);
       if (!transcoding) return null;
       const m3u8Url = await this.resolveTranscodingUrl(transcoding.url);
-      return streamFromHls(
+      const result = await streamFromHls(
         this.httpService,
         this.streamProxyUrls,
         m3u8Url,
         transcoding.format.mime_type,
       );
+      return this.withQuality(result, transcoding.quality);
     }
 
     const transcoding = pickTranscoding(transcodings, format);
@@ -128,12 +129,13 @@ export class ScPublicAnonService {
 
     try {
       const m3u8Url = await this.resolveTranscodingUrl(transcoding.url);
-      return await streamFromHls(
+      const result = await streamFromHls(
         this.httpService,
         this.streamProxyUrls,
         m3u8Url,
         transcoding.format.mime_type,
       );
+      return this.withQuality(result, transcoding.quality);
     } catch {
       this.logger.warn(`Stream failed for track ${trackId}, refreshing client_id`);
       await this.invalidateAndRefresh();
@@ -141,13 +143,27 @@ export class ScPublicAnonService {
       const retryTranscoding = pickTranscoding(retryTrack.media?.transcodings ?? [], format);
       if (!retryTranscoding) return null;
       const m3u8Url = await this.resolveTranscodingUrl(retryTranscoding.url);
-      return streamFromHls(
+      const result = await streamFromHls(
         this.httpService,
         this.streamProxyUrls,
         m3u8Url,
         retryTranscoding.format.mime_type,
       );
+      return this.withQuality(result, retryTranscoding.quality);
     }
+  }
+
+  private withQuality(
+    result: { stream: Readable; headers: Record<string, string> },
+    quality: string,
+  ): { stream: Readable; headers: Record<string, string> } {
+    return {
+      ...result,
+      headers: {
+        ...result.headers,
+        'x-stream-quality': quality === 'hq' ? 'hq' : 'lq',
+      },
+    };
   }
 
   private async refreshClientId(): Promise<string> {

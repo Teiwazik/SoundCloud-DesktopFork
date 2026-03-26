@@ -34,6 +34,11 @@ import {
 } from '../soundcloud/soundcloud.types.js';
 import { TracksService } from './tracks.service.js';
 
+interface StreamResponseLike {
+  header: (name: string, value: string) => void;
+  status: (code: number) => void;
+}
+
 @ApiTags('tracks')
 @ApiHeader({ name: 'x-session-id', required: true })
 @UseGuards(AuthGuard)
@@ -47,7 +52,12 @@ export class TracksController {
   @ApiQuery({ name: 'ids', required: false, description: 'Comma-separated track IDs' })
   @ApiQuery({ name: 'genres', required: false, description: 'Comma-separated genres' })
   @ApiQuery({ name: 'tags', required: false, description: 'Comma-separated tags' })
-  @ApiQuery({ name: 'access', required: false, enum: ['playable', 'preview', 'blocked'], default: ['playable', 'preview', 'blocked'] })
+  @ApiQuery({
+    name: 'access',
+    required: false,
+    enum: ['playable', 'preview', 'blocked'],
+    default: ['playable', 'preview', 'blocked'],
+  })
   @ApiOkResponse({ type: PaginatedTrackResponse })
   search(
     @AccessToken() token: string,
@@ -124,8 +134,7 @@ export class TracksController {
   @ApiQuery({
     name: 'format',
     required: false,
-    description:
-      'Stream format: http_mp3_128, hls_mp3_128, hls_aac_160, hls_opus_64',
+    description: 'Stream format: http_mp3_128, hls_mp3_128, hls_aac_160, hls_opus_64',
     example: 'http_mp3_128',
   })
   @ApiQuery({ name: 'secret_token', required: false })
@@ -142,7 +151,7 @@ export class TracksController {
   })
   async proxyStream(
     @AccessToken() token: string,
-    @Res({ passthrough: true }) res: any,
+    @Res({ passthrough: true }) res: StreamResponseLike,
     @Param('trackUrn') trackUrn: string,
     @Query('format') format: string = 'hls_aac_160',
     @Query('secret_token') secretToken?: string,
@@ -171,6 +180,9 @@ export class TracksController {
     const { stream, headers } = streamData;
 
     res.header('Accept-Ranges', 'bytes');
+    if (headers['x-stream-quality']) {
+      res.header('X-Stream-Quality', headers['x-stream-quality']);
+    }
     if (headers['content-range']) {
       res.status(206);
       res.header('Content-Range', headers['content-range']);
@@ -242,7 +254,12 @@ export class TracksController {
 
   @Get(':trackUrn/related')
   @ApiOperation({ summary: 'Get related tracks' })
-  @ApiQuery({ name: 'access', required: false, enum: ['playable', 'preview', 'blocked'], default: ['playable', 'preview', 'blocked'] })
+  @ApiQuery({
+    name: 'access',
+    required: false,
+    enum: ['playable', 'preview', 'blocked'],
+    default: ['playable', 'preview', 'blocked'],
+  })
   @ApiOkResponse({ type: PaginatedTrackResponse })
   getRelated(
     @AccessToken() token: string,
