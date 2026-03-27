@@ -209,6 +209,23 @@ const LANGUAGE_SCRIPT_REGEX: Record<string, RegExp> = {
   zh: /[\u4E00-\u9FFF\u3400-\u4DBF]/,
 };
 
+const LANGUAGE_SEARCH_TERMS: Record<string, string[]> = {
+  ru: ['русский рэп', 'русский поп', 'русская музыка'],
+  uk: ['українська музика', 'український реп', 'ukrainian music'],
+  de: ['deutsche musik', 'deutschrap', 'german pop'],
+  fr: ['musique francaise', 'rap francais', 'french pop'],
+  es: ['musica latina', 'rap espanol', 'spanish pop'],
+  pt: ['musica brasileira', 'rap brasileiro', 'portuguese music'],
+  it: ['musica italiana', 'italian rap', 'italian pop'],
+  pl: ['polski rap', 'polska muzyka', 'polish music'],
+  tr: ['turkce muzik', 'turkish rap', 'turkish pop'],
+  ja: ['japanese music', 'jpop', 'japanese rap'],
+  ko: ['kpop', 'korean rap', 'korean music'],
+  zh: ['mandarin pop', 'chinese music', 'c-pop'],
+  ar: ['arabic music', 'arab pop', 'arabic rap'],
+  hi: ['hindi songs', 'bollywood music', 'hindi rap'],
+};
+
 const inferLanguageFromRegion = (value: string | null | undefined): string | null => {
   if (!value) return null;
   const normalized = value.toLowerCase().trim();
@@ -403,6 +420,40 @@ const applyLanguageFilterWithEnrichment = async <T extends Track>(
   }
 
   return { filtered, profiles };
+};
+
+const fetchLanguageSearchTracks = async (preferredLanguage: string): Promise<Track[]> => {
+  const terms = LANGUAGE_SEARCH_TERMS[preferredLanguage] || [];
+  if (terms.length === 0) return [];
+
+  const responses = await Promise.all(
+    terms.map(async (term) => {
+      try {
+        const params = new URLSearchParams({
+          q: term,
+          limit: '40',
+          linked_partitioning: 'false',
+        });
+        const res = await api<{ collection?: Track[]; next_href?: string | null }>(`/tracks?${params}`);
+        if (Array.isArray(res)) {
+          return res as unknown as Track[];
+        }
+        return res?.collection || [];
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  const dedup = new Map<string, Track>();
+  for (const list of responses) {
+    for (const track of list) {
+      if (track?.urn && track.user?.username && track.title) {
+        dedup.set(track.urn, track);
+      }
+    }
+  }
+  return Array.from(dedup.values()).slice(0, 140);
 };
 
 const rerankIfEnabled = async (
@@ -1087,7 +1138,8 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
               );
               candidatesForFinalize = languageScoped;
             } else {
-              const fallbackSource = [...explorePool, ...seedTracks]
+              const languageSearchTracks = await fetchLanguageSearchTracks(settings.preferredLanguage);
+              const fallbackSource = [...languageSearchTracks, ...explorePool, ...seedTracks]
                 .filter((t) => t?.urn && !playedUrns.has(t.urn) && !dislikedUrns.includes(t.urn))
                 .slice(0, 240);
 
@@ -1276,7 +1328,8 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
         );
         candidatesForFinalize = languageScoped;
       } else {
-        const fallbackSource = [...explorePool, ...seedTracks]
+        const languageSearchTracks = await fetchLanguageSearchTracks(settings.preferredLanguage);
+        const fallbackSource = [...languageSearchTracks, ...explorePool, ...seedTracks]
           .filter((t) => t?.urn && !playedUrns.has(t.urn) && !dislikedUrns.includes(t.urn))
           .slice(0, 240);
 
