@@ -1,21 +1,33 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Settings, Play, Pause } from '../../lib/icons';
-import { 
-  X, Sun, Car, Laptop, Dumbbell, Moon, 
-  Zap, Music, Waves, Frown, Heart, Sparkles,
-  Loader2, Globe
+import {
+  Car,
+  Dumbbell,
+  Frown,
+  Globe,
+  Heart,
+  Laptop,
+  Loader2,
+  Moon,
+  Music,
+  Sparkles,
+  Sun,
+  Waves,
+  X,
+  Zap,
 } from 'lucide-react';
+import type React from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { usePlayerStore } from '../../stores/player';
-import { 
-  useSoundWaveStore, 
-  ACTIVITY_PRESETS, 
-  MOOD_PRESETS,
-  CHARACTER_PRESETS,
-  type SoundWavePreset
-} from '../../stores/soundwave';
-import { useSettingsStore } from '../../stores/settings';
+import { Pause, Play, Settings } from '../../lib/icons';
 import { SUPPORTED_LANGUAGES } from '../../lib/language-detection';
+import { usePlayerStore } from '../../stores/player';
+import { useSettingsStore } from '../../stores/settings';
+import {
+  ACTIVITY_PRESETS,
+  CHARACTER_PRESETS,
+  MOOD_PRESETS,
+  type SoundWavePreset,
+  useSoundWaveStore,
+} from '../../stores/soundwave';
 
 const SOUNDWAVE_PRESET_MAP = {
   ...ACTIVITY_PRESETS,
@@ -57,6 +69,7 @@ interface Blob {
 export const SoundWaveHero: React.FC = () => {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const isPrefetchingRef = useRef(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
   const isPlaying = usePlayerStore((s) => s.isPlaying);
@@ -84,16 +97,22 @@ export const SoundWaveHero: React.FC = () => {
     if (!isActive) return;
     if (isInitialLoading) return;
     if (queueIndex < 0 || queueLength === 0) return;
-    
+
     // If we have less than 5 tracks left in queue, fetch more
     const remaining = queueLength - (queueIndex + 1);
     if (remaining < 5) {
+      if (isPrefetchingRef.current) return;
+      isPrefetchingRef.current = true;
       console.log('[SoundWave] Queue low, prefetching...');
-      generateBatch().then((newTracks) => {
-        if (newTracks.length > 0) {
-          addToQueue(newTracks);
-        }
-      });
+      generateBatch()
+        .then((newTracks) => {
+          if (newTracks.length > 0) {
+            addToQueue(newTracks);
+          }
+        })
+        .finally(() => {
+          isPrefetchingRef.current = false;
+        });
     }
   }, [isActive, queueIndex, queueLength, generateBatch, addToQueue, isInitialLoading]);
 
@@ -121,12 +140,12 @@ export const SoundWaveHero: React.FC = () => {
 
     // SoundWave colors
     const colors = [
-      [255, 85, 0],   // SoundCloud Orange
-      [255, 45, 85],  // Pinkish
+      [255, 85, 0], // SoundCloud Orange
+      [255, 45, 85], // Pinkish
       [191, 90, 242], // Purple
-      [94, 92, 230],  // Blue
+      [94, 92, 230], // Blue
       [255, 159, 10], // Orange
-      [255, 69, 58],  // Red
+      [255, 69, 58], // Red
     ];
 
     for (let i = 0; i < blobCount; i++) {
@@ -182,10 +201,7 @@ export const SoundWaveHero: React.FC = () => {
         if (b.y < -b.r) b.y = h + b.r;
         if (b.y > h + b.r) b.y = -b.r;
 
-        const gradient = ctx.createRadialGradient(
-          b.x, b.y, 0,
-          b.x, b.y, b.r + b.wobble
-        );
+        const gradient = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r + b.wobble);
         const opacity = isActuallyPlaying ? 0.4 : 0.15;
         gradient.addColorStop(0, `rgba(${b.color[0]}, ${b.color[1]}, ${b.color[2]}, ${opacity})`);
         gradient.addColorStop(1, `rgba(${b.color[0]}, ${b.color[1]}, ${b.color[2]}, 0)`);
@@ -220,11 +236,8 @@ export const SoundWaveHero: React.FC = () => {
 
   return (
     <div className="relative w-full h-[220px] rounded-3xl overflow-hidden group/sw border border-white/[0.04] shadow-2xl bg-[#0a0a0c]">
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full pointer-events-none"
-      />
-      
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+
       {/* Content overlay */}
       <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-transparent via-transparent to-black/20">
         <h2 className="text-xl font-bold text-white/90 mb-6 tracking-wide drop-shadow-md">
@@ -280,7 +293,7 @@ export const SoundWaveHero: React.FC = () => {
                   Умный подбор музыки на основе аудиоанализа
                 </p>
               </div>
-              <button 
+              <button
                 onClick={() => setIsPanelOpen(false)}
                 className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 transition-all border border-white/5"
               >
@@ -308,12 +321,15 @@ export const SoundWaveHero: React.FC = () => {
                         key={label}
                         onClick={() => handleSelectPreset(key)}
                         className={`flex-1 flex flex-col items-center gap-2 px-1 py-3 rounded-2xl border transition-all group ${
-                          active 
-                            ? 'bg-white/10 border-white/20 text-white' 
+                          active
+                            ? 'bg-white/10 border-white/20 text-white'
                             : 'bg-white/[0.03] border-white/[0.03] text-white/40 hover:bg-white/5 hover:border-white/10 hover:text-white'
                         }`}
                       >
-                        <Icon size={18} className={active ? 'opacity-100' : 'opacity-60 group-hover:opacity-100'} />
+                        <Icon
+                          size={18}
+                          className={active ? 'opacity-100' : 'opacity-60 group-hover:opacity-100'}
+                        />
                         <span className="text-[9px] font-bold leading-none">{label}</span>
                       </button>
                     );
@@ -328,26 +344,54 @@ export const SoundWaveHero: React.FC = () => {
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { key: 'energetic' as const, icon: Zap, label: 'Бодрое', color: 'border-orange-500/50 bg-orange-500/10 text-orange-400' },
-                    { key: 'happy' as const, icon: Music, label: 'Весёлое', color: 'border-emerald-500/10 bg-emerald-500/5 text-emerald-400/80 hover:border-emerald-500/30' },
-                    { key: 'calm' as const, icon: Waves, label: 'Спокойное', color: 'border-indigo-500/10 bg-indigo-500/5 text-indigo-400/80 hover:border-indigo-500/30' },
-                    { key: 'sad' as const, icon: Frown, label: 'Грустное', color: 'border-slate-500/10 bg-slate-500/5 text-slate-400/80 hover:border-slate-500/30' },
+                    {
+                      key: 'energetic' as const,
+                      icon: Zap,
+                      label: 'Бодрое',
+                      color: 'border-orange-500/50 bg-orange-500/10 text-orange-400',
+                    },
+                    {
+                      key: 'happy' as const,
+                      icon: Music,
+                      label: 'Весёлое',
+                      color:
+                        'border-emerald-500/10 bg-emerald-500/5 text-emerald-400/80 hover:border-emerald-500/30',
+                    },
+                    {
+                      key: 'calm' as const,
+                      icon: Waves,
+                      label: 'Спокойное',
+                      color:
+                        'border-indigo-500/10 bg-indigo-500/5 text-indigo-400/80 hover:border-indigo-500/30',
+                    },
+                    {
+                      key: 'sad' as const,
+                      icon: Frown,
+                      label: 'Грустное',
+                      color:
+                        'border-slate-500/10 bg-slate-500/5 text-slate-400/80 hover:border-slate-500/30',
+                    },
                   ].map(({ key, icon: Icon, label, color }) => {
                     const active = selectedPresetKey === key;
                     return (
-                    <button
-                      key={label}
-                      onClick={() => handleSelectPreset(key)}
-                      className={`flex items-center gap-3 p-4 rounded-2xl border transition-all text-left group ${
-                        active ? color : 'border-white/5 bg-white/[0.03] text-white/50 hover:bg-white/10 hover:text-white'
-                      } ${active ? 'shadow-[0_0_20px_rgba(249,115,22,0.15)]' : ''}`}
-                    >
-                      <div className={`p-2 rounded-xl ${active ? 'bg-current/10' : 'bg-white/5'}`}>
-                        <Icon size={20} />
-                      </div>
-                      <span className="text-sm font-bold tracking-wide">{label}</span>
-                    </button>
-                  );})}
+                      <button
+                        key={label}
+                        onClick={() => handleSelectPreset(key)}
+                        className={`flex items-center gap-3 p-4 rounded-2xl border transition-all text-left group ${
+                          active
+                            ? color
+                            : 'border-white/5 bg-white/[0.03] text-white/50 hover:bg-white/10 hover:text-white'
+                        } ${active ? 'shadow-[0_0_20px_rgba(249,115,22,0.15)]' : ''}`}
+                      >
+                        <div
+                          className={`p-2 rounded-xl ${active ? 'bg-current/10' : 'bg-white/5'}`}
+                        >
+                          <Icon size={20} />
+                        </div>
+                        <span className="text-sm font-bold tracking-wide">{label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -368,8 +412,8 @@ export const SoundWaveHero: React.FC = () => {
                         key={label}
                         onClick={() => handleSelectPreset(key)}
                         className={`flex-1 flex items-center justify-center gap-2.5 py-3.5 rounded-2xl border transition-all text-xs font-bold ${
-                          active 
-                            ? 'bg-white/10 border-white/20 text-white' 
+                          active
+                            ? 'bg-white/10 border-white/20 text-white'
                             : 'bg-white/[0.03] border-white/[0.03] text-white/50 hover:bg-white/5 hover:border-white/10 hover:text-white'
                         }`}
                       >
@@ -456,7 +500,6 @@ export const SoundWaveHero: React.FC = () => {
                   </div>
                 )}
               </div>
-
             </div>
 
             {/* Actions */}
@@ -468,7 +511,11 @@ export const SoundWaveHero: React.FC = () => {
                 }}
                 className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-[#ff5500] text-white font-bold text-[15px] transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-orange-500/20 group"
               >
-                <Play size={16} fill="white" className="group-hover:translate-x-0.5 transition-transform" />
+                <Play
+                  size={16}
+                  fill="white"
+                  className="group-hover:translate-x-0.5 transition-transform"
+                />
                 <span>Перезапустить</span>
               </button>
               <button
