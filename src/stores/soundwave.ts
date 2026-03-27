@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { api } from '../lib/api';
 import { type AudioFeatures, audioAnalyser } from '../lib/audio-analyser';
 import { type FeedItem, fetchAllLikedTracks, type Playlist } from '../lib/hooks';
-import { searchLyrics } from '../lib/lyrics';
 import { rerankTracksWithLLM } from '../lib/llm-rerank';
 import { fetchCrossPlatformRegionalTracks } from '../lib/popular-sources';
 import { QdrantClient, type QdrantScoredPoint } from '../lib/qdrant';
@@ -200,6 +199,16 @@ const COUNTRY_LANGUAGE_HINTS: Record<string, string> = {
 const userRegionLanguageCache = new Map<string, string | null>();
 const lyricsLanguageCache = new Map<number, string | null>();
 
+const LANGUAGE_SCRIPT_REGEX: Record<string, RegExp> = {
+  ru: /[\u0400-\u04FF]/,
+  uk: /[\u0400-\u04FF]/,
+  ar: /[\u0600-\u06FF]/,
+  hi: /[\u0900-\u097F]/,
+  ja: /[\u3040-\u30FF\u4E00-\u9FFF]/,
+  ko: /[\uAC00-\uD7AF\u1100-\u11FF]/,
+  zh: /[\u4E00-\u9FFF\u3400-\u4DBF]/,
+};
+
 const inferLanguageFromRegion = (value: string | null | undefined): string | null => {
   if (!value) return null;
   const normalized = value.toLowerCase().trim();
@@ -278,9 +287,23 @@ const fetchLyricsLanguage = async (track: Track): Promise<string | null> => {
   }
 
   try {
-    const lyrics = await searchLyrics(track.user.username, track.title);
-    const lyricsText =
-      lyrics?.plain || lyrics?.synced?.map((line) => line.text).join(' ').trim() || '';
+    const q = encodeURIComponent(`${track.user.username} ${track.title}`.replace(/\s+/g, ' ').trim());
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+    const response = await fetch(`https://lrclib.net/api/search?q=${q}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      lyricsLanguageCache.set(track.id, null);
+      return null;
+    }
+
+    const data = (await response.json()) as Array<{ plainLyrics?: string; syncedLyrics?: string }>;
+    const first = data?.[0];
+    const lyricsText = first?.plainLyrics || first?.syncedLyrics || '';
 
     if (!lyricsText || lyricsText.length < 12) {
       lyricsLanguageCache.set(track.id, null);
@@ -353,7 +376,32 @@ const applyLanguageFilterWithEnrichment = async <T extends Track>(
     return { filtered: tracks, profiles };
   }
 
-  const filtered = filterByLanguage(tracks, profiles, preferredLanguage);
+  let filtered = filterByLanguage(tracks, profiles, preferredLanguage);
+
+  if (filtered.length === 0) {
+    const scriptRegex = LANGUAGE_SCRIPT_REGEX[preferredLanguage];
+    if (scriptRegex) {
+      const scriptMatches = tracks.filter((track) =>
+        scriptRegex.test(`${track.title || ''} ${track.description || ''}`),
+      );
+      if (scriptMatches.length > 0) {
+        for (const track of scriptMatches) {
+          const existing = profiles.get(track.id);
+          profiles.set(track.id, {
+            trackId: track.id,
+            languages: {
+              ...(existing?.languages || {}),
+              [preferredLanguage]: (existing?.languages?.[preferredLanguage] || 0) + 2,
+            },
+            primaryLanguage: preferredLanguage,
+            confidence: Math.max(existing?.confidence || 0, 0.65),
+          });
+        }
+        filtered = scriptMatches;
+      }
+    }
+  }
+
   return { filtered, profiles };
 };
 
@@ -1039,9 +1087,39 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
               );
               candidatesForFinalize = languageScoped;
             } else {
-              console.warn(
-                `[SoundWave] No '${settings.preferredLanguage}' tracks in Qdrant candidate pool after author/lyrics/title checks, fallback to unfiltered`,
-              );
+              const fallbackSource = [...explorePool, ...seedTracks]
+                .filter((t) => t?.urn && !playedUrns.has(t.urn) && !dislikedUrns.includes(t.urn))
+                .slice(0, 240);
+
+              const { filtered: languageFallback, profiles: fallbackProfiles } =
+                await applyLanguageFilterWithEnrichment(
+                  fallbackSource,
+                  settings.preferredLanguage,
+                );
+
+              if (languageFallback.length > 0) {
+                console.warn(
+                  `[SoundWave] Qdrant has 0 '${settings.preferredLanguage}' candidates, using language fallback pool: ${languageFallback.length}`,
+                );
+                candidatesForFinalize = languageFallback.map((track) => {
+                  const heardRank = heardUrnRank.has(track.urn)
+                    ? (heardUrnRank.get(track.urn) as number)
+                    : -1;
+                  return {
+                    ...track,
+                    _swScore: 4.5 + Math.random() * 1.2,
+                    _isLiked: likedUrns.has(track.urn) || Boolean(track.user_favorite),
+                    _isHeard: heardRank >= 0,
+                    _heardRank: heardRank,
+                  } as RankedTrack;
+                });
+                enrichedProfiles = fallbackProfiles;
+              } else {
+                console.warn(
+                  `[SoundWave] No '${settings.preferredLanguage}' tracks found even in fallback pool`,
+                );
+                return [];
+              }
             }
           }
 
@@ -1198,9 +1276,39 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
         );
         candidatesForFinalize = languageScoped;
       } else {
-        console.warn(
-          `[SoundWave] No '${settings.preferredLanguage}' tracks in legacy candidate pool after author/lyrics/title checks, fallback to unfiltered`,
-        );
+        const fallbackSource = [...explorePool, ...seedTracks]
+          .filter((t) => t?.urn && !playedUrns.has(t.urn) && !dislikedUrns.includes(t.urn))
+          .slice(0, 240);
+
+        const { filtered: languageFallback, profiles: fallbackProfiles } =
+          await applyLanguageFilterWithEnrichment(
+            fallbackSource,
+            settings.preferredLanguage,
+          );
+
+        if (languageFallback.length > 0) {
+          console.warn(
+            `[SoundWave] Legacy has 0 '${settings.preferredLanguage}' candidates, using language fallback pool: ${languageFallback.length}`,
+          );
+          candidatesForFinalize = languageFallback.map((track) => {
+            const heardRank = heardUrnRank.has(track.urn)
+              ? (heardUrnRank.get(track.urn) as number)
+              : -1;
+            return {
+              ...track,
+              _swScore: 4.2 + Math.random() * 1.1,
+              _isLiked: likedUrns.has(track.urn) || Boolean(track.user_favorite),
+              _isHeard: heardRank >= 0,
+              _heardRank: heardRank,
+            } as RankedTrack;
+          });
+          enrichedProfiles = fallbackProfiles;
+        } else {
+          console.warn(
+            `[SoundWave] No '${settings.preferredLanguage}' tracks found even in fallback pool`,
+          );
+          return [];
+        }
       }
     }
 
