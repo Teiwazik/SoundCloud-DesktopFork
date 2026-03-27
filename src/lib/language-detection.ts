@@ -41,7 +41,9 @@ const LANGUAGE_PATTERNS: Record<string, RegExp> = {
 };
 
 function countChars(text: string, pattern: RegExp): number {
-  const matches = text.match(pattern);
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  const matches = text.match(globalPattern);
   return matches ? matches.length : 0;
 }
 
@@ -78,7 +80,7 @@ export function detectLanguage(text: string): string {
     const count = countChars(text, pattern);
     const ratio = count / text.length;
 
-    if (ratio > 0.3) {
+    if (ratio > 0.1) {
       if (lang === 'ru' || lang === 'uk') {
         const cyrillicVariant = getCyrillicVariant(text);
         return cyrillicVariant || lang;
@@ -120,7 +122,7 @@ export function analyzeTrackLanguage(track: {
 
   for (const [lang, count] of Object.entries(langCounts)) {
     const ratio = count / totalChars;
-    if (ratio > 0.3 && count > maxCount) {
+    if (ratio > 0.1 && count > maxCount) {
       maxCount = count;
       if (lang === 'ru' || lang === 'uk') {
         primaryLanguage = getCyrillicVariant(textParts) || lang;
@@ -178,7 +180,7 @@ export function filterByLanguage<T extends { id: number }>(
 
   return tracks.filter((track) => {
     const profile = languageProfiles.get(track.id);
-    if (!profile) return true;
+    if (!profile) return false;
     return profile.primaryLanguage === preferredLanguage;
   });
 }
