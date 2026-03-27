@@ -114,6 +114,27 @@
 
 ---
 
+## Скриншоты
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/home-library.png" width="48%" alt="Главный экран с библиотекой" />
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/theme-settings.png" width="48%" alt="Настройки темы" />
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/visualizer-settings.png" width="48%" alt="Настройки визуализатора" />
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/playback-settings.png" width="48%" alt="Настройки воспроизведения" />
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/lyrics-main.png" width="48%" alt="Lyrics экран" />
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/lyrics-comments.png" width="48%" alt="Lyrics и комментарии" />
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/cover-centered-comments.png" width="48%" alt="Центрированная обложка с комментариями" />
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/assets/screenshots/discord-activity-text.png" width="48%" alt="Discord Activity text mode" />
+</p>
+
+---
+
 ## Основной репозиторий (upstream)
 
 Если хотите сверять изменения с оригинальным проектом:
