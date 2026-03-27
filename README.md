@@ -37,6 +37,14 @@
 
 ---
 
+## Статистика загрузок
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/downloads-chart.svg" alt="Downloads chart" width="800"/>
+</p>
+
+---
+
 ## Что это
 
 **SoundCloud Desktop Fork** — форк клиента SoundCloud с упором на стабильные релизы, качество воспроизведения и улучшения UX/рекомендаций.
