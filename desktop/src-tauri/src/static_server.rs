@@ -145,7 +145,14 @@ pub async fn start(wallpapers_dir: PathBuf, app_handle: tauri::AppHandle) -> u16
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
-                let _ = window.emit("discord:open-track", urn);
+
+                let _ = app.emit("discord:open-track", urn.clone());
+                let _ = window.emit("discord:open-track", urn.clone());
+
+                if let Ok(urn_json) = serde_json::to_string(&urn) {
+                    let js = format!("window.__scdRpcOpenTrack?.({urn_json});");
+                    let _ = window.eval(&js);
+                }
             }
 
             Ok(rpc_open_response(

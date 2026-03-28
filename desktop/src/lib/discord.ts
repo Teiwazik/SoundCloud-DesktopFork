@@ -252,6 +252,11 @@ async function handleRpcOpenTrack(urnRaw: string) {
 if (isTauriRuntime()) {
   const windowWithFlag = window as typeof window & {
     __scdDiscordRpcOpenListenerBound?: boolean;
+    __scdRpcOpenTrack?: (urn: string) => void;
+  };
+
+  windowWithFlag.__scdRpcOpenTrack = (urn: string) => {
+    void handleRpcOpenTrack(urn || '');
   };
 
   if (!windowWithFlag.__scdDiscordRpcOpenListenerBound) {
