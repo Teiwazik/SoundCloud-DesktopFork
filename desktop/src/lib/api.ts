@@ -15,6 +15,7 @@ let sessionExpiredHandler: (() => void) | null = null;
 const RATE_LIMIT_FALLBACK_MS = 3000;
 const RATE_LIMIT_TOAST_COOLDOWN_MS = 15000;
 const SESSION_EXPIRED_TOAST_COOLDOWN_MS = 20000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
 export function setSessionId(id: string | null) {
   sessionId = id;
@@ -38,6 +39,31 @@ async function requestWithFallback(input: string, init: RequestInit): Promise<Re
   } catch {
     return await fetch(input, init);
   }
+}
+
+function createTimedSignal(sourceSignal: AbortSignal | null | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+
+  const forwardAbort = () => controller.abort();
+  if (sourceSignal) {
+    if (sourceSignal.aborted) {
+      controller.abort();
+    } else {
+      sourceSignal.addEventListener('abort', forwardAbort, { once: true });
+    }
+  }
+
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (sourceSignal) {
+        sourceSignal.removeEventListener('abort', forwardAbort);
+      }
+    },
+  };
 }
 
 function parseRetryAfterMs(header: string | null): number | null {
@@ -94,7 +120,7 @@ function showSessionExpiredToast() {
 }
 
 export async function api<T = unknown>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const { quietHttpErrors = false, ...requestOptions } = options;
+  const { quietHttpErrors = false, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...requestOptions } = options;
   await waitForRateLimitWindow();
 
   const headers = new Headers(requestOptions.headers);
@@ -106,15 +132,19 @@ export async function api<T = unknown>(path: string, options: ApiRequestOptions 
   }
 
   let res: Response;
+  const timed = createTimedSignal(requestOptions.signal, timeoutMs);
   try {
     res = await requestWithFallback(buildApiUrl(path), {
       ...requestOptions,
       headers,
+      signal: timed.signal,
     });
     useAppStatusStore.getState().setBackendReachable(true);
   } catch (error) {
     useAppStatusStore.getState().setBackendReachable(false);
     throw error;
+  } finally {
+    timed.cleanup();
   }
 
   if (!res.ok) {
@@ -182,6 +212,7 @@ export function streamUrl(
 
 export type ApiRequestOptions = RequestInit & {
   quietHttpErrors?: boolean;
+  timeoutMs?: number;
 };
 
 export interface TrackComment {
