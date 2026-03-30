@@ -11,6 +11,8 @@ let rateLimitUntil = 0;
 let rateLimitToastAt = 0;
 let sessionExpiredToastAt = 0;
 let sessionExpiredHandler: (() => void) | null = null;
+let unauthorizedHandler: (() => void) | null = null;
+let sessionInvalidated = false;
 
 const RATE_LIMIT_FALLBACK_MS = 3000;
 const RATE_LIMIT_TOAST_COOLDOWN_MS = 15000;
@@ -19,6 +21,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
 export function setSessionId(id: string | null) {
   sessionId = id;
+  if (id) {
+    sessionInvalidated = false;
+  }
 }
 
 export function getSessionId() {
@@ -27,6 +32,10 @@ export function getSessionId() {
 
 export function setSessionExpiredHandler(handler: (() => void) | null) {
   sessionExpiredHandler = handler;
+}
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
 }
 
 async function requestWithFallback(input: string, init: RequestInit): Promise<Response> {
@@ -119,6 +128,18 @@ function showSessionExpiredToast() {
   });
 }
 
+function handleUnauthorized() {
+  useAppStatusStore.getState().setBackendReachable(false);
+
+  if (sessionInvalidated) {
+    return false;
+  }
+
+  sessionInvalidated = true;
+  unauthorizedHandler?.();
+  return true;
+}
+
 export async function api<T = unknown>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const { quietHttpErrors = false, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...requestOptions } = options;
   await waitForRateLimitWindow();
@@ -155,10 +176,11 @@ export async function api<T = unknown>(path: string, options: ApiRequestOptions 
     }
 
     const err = new ApiError(res.status, body, retryAfterMs);
+    const shouldSurfaceUnauthorized = res.status !== 401 || handleUnauthorized();
     if (!quietHttpErrors) {
       if (res.status >= 500) {
         toast.error(`Server error (${res.status})`);
-      } else if (res.status === 401) {
+      } else if (res.status === 401 && shouldSurfaceUnauthorized) {
         showSessionExpiredToast();
       } else if (res.status === 429) {
         // handled via applyRateLimitWindow to avoid toast spam
@@ -170,7 +192,9 @@ export async function api<T = unknown>(path: string, options: ApiRequestOptions 
           toast.error(`Error ${res.status}`);
         }
       }
-      console.error(`HTTP ERROR: url: ${path}, `, err);
+      if (res.status !== 401 || shouldSurfaceUnauthorized) {
+        console.error(`HTTP ERROR: url: ${path}, `, err);
+      }
     }
     throw err;
   }

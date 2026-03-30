@@ -5,7 +5,7 @@ import { useShallow } from 'zustand/shallow';
 import { AppShell } from './components/layout/AppShell';
 import { ThemeProvider } from './components/ThemeProvider';
 import { UpdateChecker } from './components/UpdateChecker';
-import { ApiError, setSessionExpiredHandler } from './lib/api';
+import { ApiError, setSessionExpiredHandler, setUnauthorizedHandler } from './lib/api';
 import { Home } from './pages/Home';
 import { Library } from './pages/Library';
 import { Login } from './pages/Login';
@@ -57,12 +57,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setUnauthorizedHandler(() => {
+      useAppStatusStore.getState().setBackendReachable(false);
+      logout();
+    });
+
     setSessionExpiredHandler(() => {
       useAppStatusStore.getState().resetConnectivity();
       logout();
     });
 
     return () => {
+      setUnauthorizedHandler(null);
       setSessionExpiredHandler(null);
     };
   }, [logout]);
