@@ -51,7 +51,28 @@ export class QdrantClient {
     return vec;
   }
 
-  vectorize(track: Track, features: AudioFeatures | null): Float32Array {
+  private projectMertEmbedding(embedding: number[], dims: number): Float32Array {
+    const projected = new Float32Array(dims);
+    if (!embedding.length) return projected;
+
+    for (let i = 0; i < embedding.length; i++) {
+      const value = Number(embedding[i]);
+      if (!Number.isFinite(value)) continue;
+      const bucket = i % dims;
+      const sign = ((i * 2654435761) >>> 0) & 1 ? 1 : -1;
+      projected[bucket] += value * sign;
+    }
+
+    this.normalize(projected);
+
+    for (let i = 0; i < projected.length; i++) {
+      projected[i] = Math.max(0, Math.min(1, 0.5 + projected[i] * 0.5));
+    }
+
+    return projected;
+  }
+
+  vectorize(track: Track, features: AudioFeatures | null, mertEmbedding?: number[] | null): Float32Array {
     const v = new Float32Array(this.dims);
 
     // [0..31] Text fingerprint
@@ -187,6 +208,15 @@ export class QdrantClient {
       v[95] = Math.min(1, (features.flux || 0) * 80 * (1 - rhythmicStability));
     }
 
+    if (Array.isArray(mertEmbedding) && mertEmbedding.length > 0) {
+      const projected = this.projectMertEmbedding(mertEmbedding, 16);
+      const mix = 0.38;
+      for (let i = 0; i < 16; i++) {
+        const idx = 80 + i;
+        v[idx] = v[idx] * (1 - mix) + projected[i] * mix;
+      }
+    }
+
     return this.normalize(v);
   }
 
@@ -236,10 +266,17 @@ export class QdrantClient {
     }
   }
 
-  async upsert(tracks: { track: Track; features: AudioFeatures | null; isLiked: boolean }[]) {
+  async upsert(
+    tracks: {
+      track: Track;
+      features: AudioFeatures | null;
+      isLiked: boolean;
+      mertEmbedding?: number[] | null;
+    }[],
+  ) {
     const points = tracks.map(t => ({
       id: this.urnToId(t.track.urn),
-      vector: Array.from(this.vectorize(t.track, t.features)),
+      vector: Array.from(this.vectorize(t.track, t.features, t.mertEmbedding || null)),
       payload: {
         urn: t.track.urn,
         id: t.track.id,
@@ -268,6 +305,7 @@ export class QdrantClient {
         mid_presence: t.features?.midPresence ?? 0,
         dynamic_range: t.features?.dynamicRange ?? 0,
         rhythmic_stability: t.features?.rhythmicStability ?? 0,
+        mert_dims: Array.isArray(t.mertEmbedding) ? t.mertEmbedding.length : 0,
       },
     }));
 
