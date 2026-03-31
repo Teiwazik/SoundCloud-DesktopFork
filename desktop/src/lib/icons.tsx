@@ -21,6 +21,7 @@ import {
   Disc3 as _Disc3,
   Download as _Download,
   ExternalLink as _ExternalLink,
+  Eye as _Eye,
   Globe as _Globe,
   GripVertical as _GripVertical,
   Hash as _Hash,
@@ -34,6 +35,7 @@ import {
   ListPlus as _ListPlus,
   Loader2 as _Loader2,
   Lock as _Lock,
+  Maximize2 as _Maximize2,
   PanelLeftClose as _PanelLeftClose,
   PanelLeftOpen as _PanelLeftOpen,
   MapPin as _MapPin,
@@ -101,6 +103,7 @@ export const Clock = memo(_Clock);
 export const Compass = memo(_Compass);
 export const Disc3 = memo(_Disc3);
 export const ExternalLink = memo(_ExternalLink);
+export const Eye = memo(_Eye);
 export const Globe = memo(_Globe);
 export const GripVertical = memo(_GripVertical);
 export const Hash = memo(_Hash);
@@ -117,6 +120,7 @@ export const ListPlus = memo(_ListPlus);
 export const Loader2 = memo(_Loader2);
 export const Lock = memo(_Lock);
 export const MapPin = memo(_MapPin);
+export const Maximize2 = memo(_Maximize2);
 export const MicVocal = memo(_MicVocal);
 export const MessageCircle = memo(_MessageCircle);
 export const Minus = memo(_Minus);

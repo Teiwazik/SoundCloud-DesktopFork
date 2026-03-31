@@ -1,4 +1,4 @@
-import React from 'react';
+import type React from 'react';
 import { Play } from '../../lib/icons';
 import { useTilt } from '../../lib/hooks/useTilt';
 

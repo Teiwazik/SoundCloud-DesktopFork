@@ -4,9 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Skeleton } from '../components/ui/Skeleton.tsx';
 import { reloadCurrentTrack } from '../lib/audio';
-import { DEFAULT_API_BASE, getApiBase, normalizeApiBase } from '../lib/constants';
+import { DEFAULT_API_BASE, getApiBase } from '../lib/constants';
 import {
-  cacheTracksBatch,
   clearAssetsCache,
   clearCache,
   downloadWallpaper,
@@ -16,11 +15,14 @@ import {
   listWallpapers,
   removeWallpaper,
   saveWallpaperFromBuffer,
+  getLyricsCacheSize,
+  clearLyricsCache,
 } from '../lib/cache';
 import { fetchAllLikedTracks } from '../lib/hooks';
-import { Globe, Link, Loader2, Trash2, X } from '../lib/icons';
+import { Globe, Link, Loader2, Trash2, X, Play, Pause, Square } from '../lib/icons';
 import { useAuthStore } from '../stores/auth';
-import { useDislikesStore } from '../stores/dislikes';
+import { useCacheTaskStore } from '../stores/cache-task';
+
 import {
   isDefaultQdrantKeyInUse,
   THEME_PRESETS,
@@ -148,14 +150,16 @@ const CacheSection = React.memo(function CacheSection() {
   const { t } = useTranslation();
   const [audioSize, setAudioSize] = useState<number | null>(null);
   const [assetsSize, setAssetsSize] = useState<number | null>(null);
+  const [lyricsSize, setLyricsSize] = useState<number | null>(null);
   const [clearingAudio, setClearingAudio] = useState(false);
   const [clearingAssets, setClearingAssets] = useState(false);
+  const [clearingLyrics, setClearingLyrics] = useState(false);
   const [cachingLikes, setCachingLikes] = useState(false);
-  const [cacheLikesProgress, setCacheLikesProgress] = useState<{ completed: number; total: number } | null>(null);
 
   useEffect(() => {
     getCacheSize().then(setAudioSize);
     getAssetsCacheSize().then(setAssetsSize);
+    getLyricsCacheSize().then(setLyricsSize);
   }, []);
 
   const handleClearAudio = useCallback(async () => {
@@ -184,43 +188,34 @@ const CacheSection = React.memo(function CacheSection() {
     }
   }, [t]);
 
-  const refreshSizes = useCallback(() => {
-    void getCacheSize().then(setAudioSize);
-    void getAssetsCacheSize().then(setAssetsSize);
-  }, []);
+  const handleClearLyrics = useCallback(async () => {
+    setClearingLyrics(true);
+    try {
+      await clearLyricsCache();
+      setLyricsSize(0);
+      toast.success(t('settings.cacheCleared'));
+    } catch {
+      toast.error(t('common.error'));
+    } finally {
+      setClearingLyrics(false);
+    }
+  }, [t]);
+
+  const cacheTask = useCacheTaskStore();
 
   const handleCacheAllLiked = useCallback(async () => {
     setCachingLikes(true);
-    setCacheLikesProgress({ completed: 0, total: 0 });
-
     try {
       const likedTracks = await fetchAllLikedTracks();
-      setCacheLikesProgress({ completed: 0, total: likedTracks.length });
-
-      const result = await cacheTracksBatch(
-        likedTracks.map((track) => track.urn),
-        {
-          concurrency: 3,
-          onProgress: (progress) => setCacheLikesProgress(progress),
-        },
-      );
-
-      refreshSizes();
-      toast.success(
-        t('settings.cacheAllLikedDone', {
-          completed: result.completed,
-          skipped: result.skipped,
-          failed: result.failed,
-        }),
-      );
+      cacheTask.startBatch(likedTracks.map((t) => t.urn));
     } catch {
       toast.error(t('common.error'));
     } finally {
       setCachingLikes(false);
     }
-  }, [refreshSizes, t]);
+  }, [cacheTask, t]);
 
-  const totalSize = (audioSize ?? 0) + (assetsSize ?? 0);
+  const totalSize = (audioSize ?? 0) + (assetsSize ?? 0) + (lyricsSize ?? 0);
 
   return (
     <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl space-y-2">
@@ -230,7 +225,7 @@ const CacheSection = React.memo(function CacheSection() {
         </h3>
 
         <div className="min-w-[80px] flex justify-end">
-          {audioSize !== null && assetsSize !== null ? (
+          {audioSize !== null && assetsSize !== null && lyricsSize !== null ? (
             <span className="text-[12px] text-white/30 tabular-nums">
               {t('settings.total')}: {formatBytes(totalSize)}
             </span>
@@ -255,23 +250,68 @@ const CacheSection = React.memo(function CacheSection() {
         t={t}
       />
       <div className="border-t border-white/[0.04]" />
+      <CacheRow
+        label={t('settings.lyricsCacheSize', 'Lyrics cache size')}
+        size={lyricsSize}
+        clearing={clearingLyrics}
+        onClear={handleClearLyrics}
+        t={t}
+      />
+      <div className="border-t border-white/[0.04]" />
       <div className="flex items-center justify-between gap-4 py-2">
         <div className="min-w-0">
           <p className="text-[13px] text-white/70 font-medium">{t('settings.cacheAllLiked')}</p>
           <p className="text-[11px] text-white/30">
-            {cachingLikes && cacheLikesProgress
-              ? t('settings.cacheAllLikedProgress', cacheLikesProgress)
-              : t('settings.cacheAllLikedDesc')}
+            {cachingLikes 
+              ? t('settings.loadingTracks', 'Loading tracks list...')
+              : cacheTask.status !== 'idle'
+                ? `${t('settings.cacheProgress', 'Progress')}: ${cacheTask.completed + cacheTask.skipped} / ${cacheTask.total} (${cacheTask.failed} failed)`
+                : t('settings.cacheAllLikedDesc')}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleCacheAllLiked}
-          disabled={cachingLikes}
-          className="shrink-0 rounded-xl border border-white/[0.08] bg-white/[0.05] px-4 py-2 text-[12px] font-semibold text-white/85 transition-all hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {cachingLikes ? t('settings.cachingNow') : t('settings.startCaching')}
-        </button>
+        
+        <div className="flex items-center gap-2">
+          {cacheTask.status === 'idle' ? (
+            <button
+              type="button"
+              onClick={handleCacheAllLiked}
+              disabled={cachingLikes}
+              className="shrink-0 rounded-xl border border-white/[0.08] bg-white/[0.05] px-4 py-2 text-[12px] font-semibold text-white/85 transition-all hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {cachingLikes ? t('settings.loading', 'Loading...') : t('settings.startCaching')}
+            </button>
+          ) : (
+            <>
+              {cacheTask.status === 'running' ? (
+                <button
+                  type="button"
+                  onClick={() => cacheTask.pauseBatch()}
+                  className="w-8 h-8 rounded-xl flex items-center justify-center border border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 transition-all cursor-pointer"
+                  title="Pause"
+                >
+                  <Pause size={14} fill="currentColor" strokeWidth={0} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => cacheTask.resumeBatch()}
+                  className="w-8 h-8 rounded-xl flex items-center justify-center border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-all cursor-pointer"
+                  title="Resume"
+                >
+                  <Play size={14} fill="currentColor" strokeWidth={0} className="ml-0.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => cacheTask.stopBatch()}
+                className="w-8 h-8 rounded-xl flex items-center justify-center border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-all cursor-pointer"
+                title="Stop"
+              >
+                <Square size={12} fill="currentColor" strokeWidth={0} />
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -967,11 +1007,35 @@ const PlaybackSection = React.memo(function PlaybackSection() {
   const crossfadeDuration = useSettingsStore((s) => s.crossfadeDuration);
   const setCrossfadeEnabled = useSettingsStore((s) => s.setCrossfadeEnabled);
   const setCrossfadeDuration = useSettingsStore((s) => s.setCrossfadeDuration);
+  const classicPlaybar = useSettingsStore((s) => s.classicPlaybar);
+  const setClassicPlaybar = useSettingsStore((s) => s.setClassicPlaybar);
   return (
     <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl space-y-5">
       <h3 className="text-[15px] font-bold text-white/80 tracking-tight">
         {t('settings.playback')}
       </h3>
+
+      {/* Classic Playbar */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-[13px] text-white/70 font-medium">{t('settings.classicPlaybar')}</p>
+          <p className="text-[11px] text-white/30 mt-0.5">{t('settings.classicPlaybarDesc')}</p>
+        </div>
+        <button
+          onClick={() => setClassicPlaybar(!classicPlaybar)}
+          className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
+            classicPlaybar ? 'bg-accent' : 'bg-white/10'
+          }`}
+        >
+          <div
+            className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
+              classicPlaybar ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
+            }`}
+          />
+        </button>
+      </div>
+
+      <div className="border-t border-white/[0.04]" />
 
       {/* Floating Comments */}
       <div className="flex items-center justify-between">
@@ -1370,47 +1434,7 @@ const AccountSection = React.memo(function AccountSection() {
   );
 });
 
-const DislikedTracksSection = React.memo(function DislikedTracksSection() {
-  const { t } = useTranslation();
-  const dislikedTrackUrns = useDislikesStore((s) => s.dislikedTrackUrns);
-  const toggleDislike = useDislikesStore((s) => s.toggleDislike);
 
-  return (
-    <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl">
-      <h3 className="text-[15px] font-bold text-white/80 tracking-tight mb-4">
-        {t('settings.dislikedTracksTitle')}
-      </h3>
-
-      {dislikedTrackUrns.length === 0 ? (
-        <p className="text-[12px] text-white/35">{t('settings.dislikedTracksEmpty')}</p>
-      ) : (
-        <div className="space-y-2.5">
-          {dislikedTrackUrns.map((urn) => {
-            const shortUrn = urn.split(':').pop() || urn;
-            return (
-              <div
-                key={urn}
-                className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-3.5 py-2.5"
-              >
-                <div className="min-w-0">
-                  <p className="text-[12px] text-white/75 font-medium truncate">#{shortUrn}</p>
-                  <p className="text-[10px] text-white/30 truncate">{urn}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => toggleDislike(urn)}
-                  className="shrink-0 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-red-300/90 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-colors cursor-pointer"
-                >
-                  {t('settings.removeDislike')}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-});
 
 /* ── Visualizer Section ──────────────────────────────────── */
 
@@ -1660,10 +1684,14 @@ const EqualizerSection = React.memo(function EqualizerSection() {
 const ApiSection = React.memo(function ApiSection() {
   const { t } = useTranslation();
   const apiMode = useSettingsStore((s) => s.apiMode);
-  const customApiBase = useSettingsStore((s) => s.customApiBase);
+  const customApiKey = useSettingsStore((s) => s.customApiKey);
   const setApiMode = useSettingsStore((s) => s.setApiMode);
-  const setCustomApiBase = useSettingsStore((s) => s.setCustomApiBase);
-  const normalizedCustomApi = normalizeApiBase(customApiBase);
+  const setCustomApiKey = useSettingsStore((s) => s.setCustomApiKey);
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(t('auth.copied'));
+  };
 
   return (
     <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl space-y-4">
@@ -1692,7 +1720,7 @@ const ApiSection = React.memo(function ApiSection() {
         })}
       </div>
 
-      <div className="rounded-2xl border border-white/[0.05] bg-white/[0.03] p-4 space-y-3">
+      <div className="rounded-2xl border border-white/[0.05] bg-white/[0.03] p-4 space-y-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/28">
             {t('settings.currentApiServer')}
@@ -1701,17 +1729,41 @@ const ApiSection = React.memo(function ApiSection() {
         </div>
 
         {apiMode === 'custom' ? (
-          <div className="space-y-2">
-            <input
-              type="text"
-              value={customApiBase}
-              onChange={(e) => setCustomApiBase(e.target.value)}
-              placeholder={t('settings.customApiPlaceholder')}
-              className="w-full rounded-2xl border border-white/[0.06] bg-white/[0.04] px-4 py-3 text-[13px] text-white/85 placeholder:text-white/20 outline-none transition-all focus:border-white/[0.12] focus:bg-white/[0.06]"
-            />
-            <p className={`text-[11px] ${normalizedCustomApi ? 'text-emerald-200/70' : 'text-red-300/80'}`}>
-              {normalizedCustomApi ? normalizedCustomApi : t('settings.customApiInvalid')}
-            </p>
+          <div className="space-y-4 animate-fade-in-up">
+            <div className="space-y-2">
+              <label className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/40 ml-1">
+                SoundCloud Client ID
+              </label>
+              <input
+                type="text"
+                value={customApiKey}
+                onChange={(e) => setCustomApiKey(e.target.value)}
+                placeholder="y5Z..."
+                className="w-full rounded-2xl border border-white/[0.06] bg-white/[0.04] px-4 py-3 text-[13px] text-white/85 placeholder:text-white/20 outline-none transition-all focus:border-white/[0.12] focus:bg-white/[0.06]"
+              />
+            </div>
+
+            <div className="space-y-2 bg-white/[0.03] border border-white/[0.05] rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/40">
+                  {t('settings.apiSetupInfo')}
+                </label>
+                <button
+                  onClick={() => copyToClipboard('https://api-v2.soundcloud.com/tracks?client_id=')}
+                  className="text-[10px] font-bold text-accent hover:text-accent-hover transition-colors uppercase tracking-widest"
+                >
+                  {t('auth.copyLink')}
+                </button>
+              </div>
+              <div className="bg-black/20 rounded-xl p-3 border border-white/[0.04]">
+                <code className="text-[11px] text-white/60 break-all leading-relaxed">
+                  https://api-v2.soundcloud.com/tracks?client_id=
+                </code>
+              </div>
+              <p className="text-[10px] text-white/25 leading-normal">
+                {t('settings.apiSetupDesc')}
+              </p>
+            </div>
           </div>
         ) : (
           <p className="text-[12px] text-white/30">{DEFAULT_API_BASE}</p>
@@ -1739,7 +1791,7 @@ export function Settings() {
       <AudioDeviceSection />
       <ImportSection />
       <ApiSection />
-      <DislikedTracksSection />
+
       <AccountSection />
     </div>
   );

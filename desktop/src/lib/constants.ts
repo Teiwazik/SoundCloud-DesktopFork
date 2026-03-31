@@ -17,10 +17,9 @@ export function normalizeApiBase(value: string) {
 }
 
 export function getApiBase() {
-  const { apiMode, customApiBase } = useSettingsStore.getState();
-  if (apiMode === 'custom') {
-    const normalized = normalizeApiBase(customApiBase);
-    if (normalized) return normalized;
+  const { apiMode, customApiKey } = useSettingsStore.getState();
+  if (apiMode === 'custom' && customApiKey.trim()) {
+    return `${DEFAULT_API_BASE}?client_id=${customApiKey.trim()}`;
   }
   return DEFAULT_API_BASE;
 }

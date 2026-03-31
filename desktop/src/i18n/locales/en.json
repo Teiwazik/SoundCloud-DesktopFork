@@ -7,7 +7,8 @@
     "following": "Following",
     "settings": "Settings",
     "collapse": "Collapse",
-    "expand": "Expand"
+    "expand": "Expand",
+    "fullscreen": "Fullscreen"
   },
   "player": {
     "queue": "Queue",
@@ -61,6 +62,7 @@
     "lyricsLoading": "Searching lyrics...",
     "download": "Download",
     "downloaded": "Saved",
+    "artwork": "Artwork",
     "preview": "Preview",
     "dislike": "Don't play this track",
     "moodCorrection": "Correct mood",
@@ -158,6 +160,10 @@
     "cacheAllLikedDone": "Cached: {{completed}}, skipped: {{skipped}}, failed: {{failed}}",
     "startCaching": "Start",
     "cachingNow": "Caching...",
+    "loading": "Loading...",
+    "loadingTracks": "Loading tracks list...",
+    "cacheProgress": "Progress",
+    "lyricsCacheSize": "Lyrics cache size",
     "appearance": "Appearance",
     "accentColor": "Accent color",
     "backgroundImage": "Background image",
@@ -181,8 +187,10 @@
     "apiModeAuto": "Automatic",
     "apiModeCustom": "Custom",
     "currentApiServer": "Current API server",
-    "customApiPlaceholder": "https://your-api.example.com",
-    "customApiInvalid": "Enter a valid API URL",
+    "customApiPlaceholder": "https://api.example.com",
+    "customApiInvalid": "Enter a valid URL (https://...)",
+    "apiSetupInfo": "Request Info for Setup",
+    "apiSetupDesc": "Copy this request string to identify SoundCloud traffic patterns if your custom proxy requires specific client identification.",
     "themePreset": "Theme",
     "theme_soundcloud": "SoundCloud",
     "theme_dark": "Dark",
@@ -426,7 +434,9 @@
     "cachedEmpty": "The cache is empty for now. Play or download tracks online and they will appear here.",
     "cached": "Cached",
     "notCached": "Not cached",
-    "syncNow": "Sync now"
+    "syncNow": "Sync now",
+    "lyrics": "Lyrics",
+    "clearLyrics": "Clear cached lyrics"
   },
   "common": {
     "loading": "Loading...",

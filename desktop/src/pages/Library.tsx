@@ -1,3 +1,4 @@
+import { useQueries } from '@tanstack/react-query';
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -36,6 +37,7 @@ import {
 } from '../lib/icons';
 import { useTrackPlay } from '../lib/useTrackPlay';
 import { useAuthStore } from '../stores/auth';
+import { useDislikesStore } from '../stores/dislikes';
 import type { Track } from '../stores/player';
 import { usePlayerStore } from '../stores/player';
 
@@ -678,6 +680,163 @@ const HistoryTab = React.memo(function HistoryTab() {
   );
 });
 
+const DislikedTrackRow = React.memo(
+  function DislikedTrackRow({
+    track,
+    index,
+    queue,
+    onRemoveDislike,
+  }: {
+    track: Track;
+    index: number;
+    queue: Track[];
+    onRemoveDislike: (urn: string) => void;
+  }) {
+    const { t } = useTranslation();
+    const navigate = useNavigate();
+    const { isThis, isThisPlaying, togglePlay } = useTrackPlay(track, queue);
+
+    const cover = art(track.artwork_url, 't200x200');
+
+    return (
+      <div
+        className={`group flex items-center gap-4 px-4 py-3 rounded-2xl transition-all duration-300 ease-[var(--ease-apple)] ${
+          isThis
+            ? 'bg-accent/[0.06] ring-1 ring-accent/20 shadow-[inset_0_0_20px_rgba(255,85,0,0.05)]'
+            : 'hover:bg-white/[0.04]'
+        }`}
+      >
+        <div
+          className="w-8 h-8 flex items-center justify-center shrink-0 cursor-pointer"
+          onClick={togglePlay}
+          onMouseEnter={() => preloadTrack(track.urn)}
+        >
+          {isThisPlaying ? (
+            <div className="w-8 h-8 rounded-full bg-accent text-accent-contrast flex items-center justify-center shadow-[0_0_15px_var(--color-accent-glow)] scale-100 animate-fade-in-up">
+              {pauseWhite14}
+            </div>
+          ) : (
+            <>
+              <span className="text-[13px] text-white/20 tabular-nums font-medium group-hover:hidden">
+                {index + 1}
+              </span>
+              <div className="hidden group-hover:flex w-8 h-8 rounded-full bg-white/10 items-center justify-center hover:bg-white/20 hover:scale-105 transition-all">
+                {playWhite14}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="relative w-11 h-11 rounded-xl overflow-hidden shrink-0 ring-1 ring-white/[0.08] shadow-md">
+          {cover ? (
+            <img src={cover} alt="" className="w-full h-full object-cover" decoding="async" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-white/[0.05] to-transparent">
+              <Music size={14} className="text-white/20" />
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 min-w-0 flex flex-col justify-center">
+          <p
+            className={`text-[14px] font-medium truncate cursor-pointer transition-colors duration-200 ${
+              isThis
+                ? 'text-accent drop-shadow-[0_0_8px_rgba(255,85,0,0.4)]'
+                : 'text-white/90 hover:text-white'
+            }`}
+            onClick={() => navigate(`/track/${encodeURIComponent(track.urn)}`)}
+          >
+            {track.title}
+          </p>
+          <p
+            className="text-[12px] text-white/40 truncate mt-0.5 cursor-pointer hover:text-white/70 transition-colors"
+            onClick={() => navigate(`/user/${encodeURIComponent(track.user.urn)}`)}
+          >
+            {track.user.username}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onRemoveDislike(track.urn)}
+          className="shrink-0 rounded-lg px-3 py-1.5 text-[12px] font-semibold text-red-300/90 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 opacity-0 group-hover:opacity-100 transition-all duration-200 cursor-pointer"
+          title={t('settings.removeDislike', 'Remove Dislike')}
+        >
+          <X size={14} />
+        </button>
+
+        <span className="text-[12px] text-white/30 tabular-nums font-medium shrink-0 w-12 text-right">
+          {dur(track.duration)}
+        </span>
+      </div>
+    );
+  },
+  (prev, next) => prev.track.urn === next.track.urn && prev.index === next.index,
+);
+
+const DislikesTab = React.memo(function DislikesTab({ filter }: { filter: string }) {
+  const { t } = useTranslation();
+  const dislikedTrackUrns = useDislikesStore((s) => s.dislikedTrackUrns);
+  const toggleDislike = useDislikesStore((s) => s.toggleDislike);
+
+  const trackQueries = useQueries({
+    queries: dislikedTrackUrns.map((urn) => ({
+      queryKey: ['track', urn],
+      queryFn: () => api<Track>(`/tracks/${encodeURIComponent(urn)}`),
+      staleTime: 5 * 60 * 1000,
+      retry: 1,
+    })),
+  });
+
+  const isLoading = dislikedTrackUrns.length > 0 && trackQueries.some((q) => q.isLoading);
+
+  const tracks = useMemo(() => {
+    const loaded: Track[] = [];
+    for (const q of trackQueries) {
+      if (q.data) loaded.push(q.data);
+    }
+    return loaded;
+  }, [trackQueries]);
+
+  const filtered = useMemo(() => {
+    if (!filter) return tracks;
+    const q = filter.toLowerCase();
+    return tracks.filter(
+      (t) => t.title.toLowerCase().includes(q) || t.user.username.toLowerCase().includes(q),
+    );
+  }, [tracks, filter]);
+
+  return (
+    <div className="min-h-[400px]">
+      {isLoading ? (
+        <div className="flex justify-center py-20">
+          <Loader2 size={32} className="animate-spin text-white/20" />
+        </div>
+      ) : dislikedTrackUrns.length === 0 ? (
+        <div className="py-20 text-center text-white/35">
+          {t('settings.dislikedTracksEmpty', 'No disliked tracks')}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="py-20 text-center text-white/20">
+          {filter ? t('library.noMatches') : t('settings.dislikedTracksEmpty', 'No disliked tracks')}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {filtered.map((track, i) => (
+            <DislikedTrackRow
+              key={track.urn}
+              track={track}
+              index={i}
+              queue={filtered}
+              onRemoveDislike={toggleDislike}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
 /* ── Main Page ────────────────────────────────────────────── */
 
 export const Library = React.memo(() => {
@@ -689,15 +848,15 @@ export const Library = React.memo(() => {
     | 'following'
     | 'history'
     | null;
-  const [activeTab, setActiveTab] = useState<'playlists' | 'likes' | 'following' | 'history'>(
-    tabParam || 'likes',
+  const [activeTab, setActiveTab] = useState<'playlists' | 'likes' | 'following' | 'history' | 'dislikes'>(
+    (tabParam as any) || 'likes',
   );
   const [filter, setFilter] = useState('');
 
   // Sync tab from URL param
   useEffect(() => {
-    if (tabParam && tabParam !== activeTab) setActiveTab(tabParam);
-  }, [tabParam]);
+    if (tabParam && tabParam !== activeTab) setActiveTab(tabParam as any);
+  }, [tabParam, activeTab]);
   const deferredFilter = useDeferredValue(filter);
   const user = useAuthStore((s) => s.user);
 
@@ -709,6 +868,7 @@ export const Library = React.memo(() => {
     { id: 'likes', label: t('library.likedTracks') },
     { id: 'following', label: t('nav.following') },
     { id: 'history', label: t('library.history') },
+    { id: 'dislikes', label: t('settings.dislikedTracksTitle', 'Disliked') },
   ] as const;
 
   if (!user) return null;
@@ -768,6 +928,7 @@ export const Library = React.memo(() => {
       {activeTab === 'following' && <FollowingTab filter={deferredFilter} />}
       {activeTab === 'playlists' && <PlaylistsTab filter={deferredFilter} />}
       {activeTab === 'history' && <HistoryTab />}
+      {activeTab === 'dislikes' && <DislikesTab filter={deferredFilter} />}
     </div>
   );
 });

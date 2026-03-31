@@ -3,7 +3,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api';
-import { DEFAULT_API_BASE, getApiBase, normalizeApiBase } from '../lib/constants';
+import { DEFAULT_API_BASE, getApiBase } from '../lib/constants';
 import { Check, ClipboardCopy, Disc3 } from '../lib/icons';
 import { queryClient } from '../main';
 import { useAuthStore } from '../stores/auth';
@@ -23,15 +23,14 @@ export function Login() {
   const setSession = useAuthStore((s) => s.setSession);
   const fetchUser = useAuthStore((s) => s.fetchUser);
   const apiMode = useSettingsStore((s) => s.apiMode);
-  const customApiBase = useSettingsStore((s) => s.customApiBase);
+  const customApiKey = useSettingsStore((s) => s.customApiKey);
   const setApiMode = useSettingsStore((s) => s.setApiMode);
-  const setCustomApiBase = useSettingsStore((s) => s.setCustomApiBase);
+  const setCustomApiKey = useSettingsStore((s) => s.setCustomApiKey);
   const [loading, setLoading] = useState(false);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const normalizedCustomApi = normalizeApiBase(customApiBase);
-  const canUseCustomApi = apiMode === 'auto' || Boolean(normalizedCustomApi);
+  const canUseCustomApi = apiMode === 'auto' || Boolean(customApiKey.trim());
 
   useEffect(() => {
     return () => {
@@ -132,13 +131,13 @@ export function Login() {
               <>
                 <input
                   type="text"
-                  value={customApiBase}
-                  onChange={(e) => setCustomApiBase(e.target.value)}
-                  placeholder={t('settings.customApiPlaceholder')}
+                  value={customApiKey}
+                  onChange={(e) => setCustomApiKey(e.target.value)}
+                  placeholder="SoundCloud Client ID"
                   className="w-full rounded-2xl border border-white/[0.06] bg-white/[0.04] px-4 py-3 text-[13px] text-white/85 placeholder:text-white/20 outline-none transition-all focus:border-white/[0.12] focus:bg-white/[0.06]"
                 />
                 {!canUseCustomApi && (
-                  <p className="text-[11px] text-red-300/80">{t('settings.customApiInvalid')}</p>
+                  <p className="text-[11px] text-red-300/80">API Key is required</p>
                 )}
               </>
             ) : (

@@ -894,7 +894,7 @@ const DiscordLyricsSyncer = React.memo(() => {
 
   const { data: lyrics } = useQuery({
     queryKey: ['lyrics', currentTrack?.urn, currentTrack?.user.username, currentTrack?.title],
-    queryFn: () => searchLyrics(currentTrack!.user.username, currentTrack!.title),
+    queryFn: () => searchLyrics(currentTrack!.urn, currentTrack!.user.username, currentTrack!.title),
     enabled: !!currentTrack,
     staleTime: Number.POSITIVE_INFINITY,
   });

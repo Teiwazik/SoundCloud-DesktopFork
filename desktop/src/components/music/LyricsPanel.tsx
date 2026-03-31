@@ -9,9 +9,11 @@ import { invalidateAllLikesCache } from '../../lib/hooks';
 import {
   Ban,
   ExternalLink,
+  Eye,
   Heart,
   ListPlus,
   Loader2,
+  Maximize2,
   MicVocal,
   pauseBlack18,
   playBlack18,
@@ -404,9 +406,11 @@ const Controls = React.memo(({ track }: { track: Track }) => {
 
 const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: string }) => {
   const artwork500 = art(track.artwork_url, 't500x500');
+  const artworkOriginal = artwork500 ? artwork500.replace('t500x500', 'original') : null;
   const artwork200 = art(track.artwork_url, 't200x200');
   const [loaded, setLoaded] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
+  const [showFullArt, setShowFullArt] = useState(false);
   const prevUrnRef = useRef<string | null>(track.urn);
   const mountedRef = useRef(false);
   const switchTimerRef = useRef<number | null>(null);
@@ -428,6 +432,7 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
     if (prevUrnRef.current !== track.urn) {
       prevUrnRef.current = track.urn;
       setLoaded(false);
+      setShowFullArt(false);
 
       const shouldBlurTransition = Boolean(artwork200 && artwork500 && artwork200 !== artwork500);
       setIsSwitching(shouldBlurTransition);
@@ -455,7 +460,7 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
   return (
     <div className="flex flex-col items-center justify-center gap-5 px-12">
       <div
-        className={`w-full ${maxArt ?? 'max-w-[360px]'} aspect-square rounded-2xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-white/[0.08] relative`}
+        className={`w-full ${maxArt ?? 'max-w-[360px]'} aspect-square rounded-2xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-white/[0.08] relative group/art`}
       >
         {artwork500 ? (
           <>
@@ -480,6 +485,20 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
               }}
               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-[var(--ease-apple)] ${loaded ? 'opacity-100' : 'opacity-0'}`}
             />
+
+            {/* Hover Overlay with View Icon */}
+            <button
+              type="button"
+              onClick={() => setShowFullArt(true)}
+              className="absolute inset-0 bg-black/40 opacity-0 group-hover/art:opacity-100 transition-opacity duration-300 flex items-center justify-center text-white/90 backdrop-blur-[2px] cursor-pointer outline-none"
+            >
+              <div className="flex flex-col items-center gap-2 scale-90 group-hover/art:scale-100 transition-transform duration-300">
+                <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center border border-white/20">
+                  <Eye size={24} />
+                </div>
+                <span className="text-[11px] font-bold tracking-wider uppercase opacity-60">Просмотр</span>
+              </div>
+            </button>
           </>
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-white/[0.06] to-white/[0.02] flex items-center justify-center">
@@ -487,6 +506,33 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
           </div>
         )}
       </div>
+
+      {/* Full-screen Image Modal */}
+      {showFullArt && artworkOriginal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 sm:p-12 animate-fade-in bg-black/90 backdrop-blur-xl">
+          <div
+            className="absolute inset-0 cursor-pointer"
+            onClick={() => setShowFullArt(false)}
+          />
+          <button
+            type="button"
+            onClick={() => setShowFullArt(false)}
+            className="absolute top-6 right-6 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all z-10 border border-white/10"
+          >
+            <X size={20} />
+          </button>
+          <img
+            src={artworkOriginal}
+            alt={track.title}
+            className="relative z-10 max-w-full max-h-full rounded-2xl shadow-[0_32px_128px_rgba(0,0,0,0.8)] animate-zoom-in object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <div className="absolute bottom-8 left-0 right-0 text-center z-10 pointer-events-none px-6">
+            <p className="text-white/90 font-bold text-lg drop-shadow-lg">{track.title}</p>
+            <p className="text-white/40 text-sm drop-shadow-md">{track.user.username}</p>
+          </div>
+        </div>
+      )}
 
       <div className={`w-full ${maxArt ?? 'max-w-[360px]'} text-center space-y-1`}>
         <p className="text-[18px] font-bold text-white/95 truncate">{track.title}</p>
@@ -554,6 +600,63 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
     return ans;
   };
 
+  const updateLineProgress = (idx: number, time: number) => {
+    const lineEls = lineElsRef.current;
+    const current = lineEls[idx];
+    if (!current) return;
+
+    const currentLine = linesRef.current[idx];
+    const nextLine = linesRef.current[idx + 1];
+    const duration = Math.max((nextLine?.time ?? currentLine.time + 2.4) - currentLine.time, 0.35);
+    const progress = Math.max(0, Math.min((time - currentLine.time) / duration, 1));
+    const activeChars = current.querySelectorAll<HTMLElement>('[data-char-index]');
+    const activeCount = Math.floor(progress * activeChars.length + 0.0001);
+
+    current.style.setProperty('--lyric-progress', `${progress * 100}%`);
+    current.style.setProperty('--lyric-progress-value', `${progress}`);
+
+    activeChars.forEach((charEl, charIndex) => {
+      charEl.dataset.charState = charIndex < activeCount ? 'active' : '';
+    });
+  };
+
+  const applyStates = (idx: number, _prev: number) => {
+    const lineEls = lineElsRef.current;
+    
+    for (let i = 0; i < lineEls.length; i++) {
+      const el = lineEls[i];
+      if (!el) continue;
+
+      let state = '';
+      let progress = '0%';
+      if (i === idx) {
+        state = 'active';
+      } else if (i < idx) {
+        state = idx - i === 1 ? 'past-near' : 'past';
+        progress = '100%';
+      } else if (i > idx) {
+        state = i - idx === 1 ? 'next-near' : 'next';
+      }
+
+      const stateChanged = el.dataset.state !== state;
+      if (stateChanged) {
+        el.dataset.state = state;
+      }
+      
+      const progressChanged = el.style.getPropertyValue('--lyric-progress') !== progress;
+      if (progressChanged) {
+        el.style.setProperty('--lyric-progress', progress);
+      }
+      
+      if (state !== 'active' && (stateChanged || progressChanged)) {
+        el.style.setProperty('--lyric-progress-value', progress === '100%' ? '1' : '0');
+        el.querySelectorAll<HTMLElement>('[data-char-index]').forEach((charEl) => {
+          charEl.dataset.charState = progress === '100%' ? 'active' : '';
+        });
+      }
+    }
+  };
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: lines triggers DOM re-cache
   useEffect(() => {
     const container = containerRef.current;
@@ -580,42 +683,33 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
       const currentLines = linesRef.current;
 
       const idx = findActiveIndex(currentLines, time);
-      if (idx === activeRef.current) return;
-
       const prev = activeRef.current;
-      activeRef.current = idx;
+      if (idx !== activeRef.current) {
+        activeRef.current = idx;
 
-      if (idx >= 0 && idx < lineEls.length) {
-        lineEls[idx].dataset.state = 'active';
-        const el = lineEls[idx];
-        const top = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
-        const now = performance.now();
-        if (!manualScrollDetachedRef.current) {
-          if (now - lastScrollTsRef.current < 220 || prev === -1 || Math.abs(idx - prev) > 2) {
-            container.scrollTo({ top, behavior: 'auto' });
-          } else {
-            container.scrollTo({ top, behavior: 'smooth' });
+        if (idx >= 0 && idx < lineEls.length) {
+          const el = lineEls[idx];
+          const top = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+          const now = performance.now();
+          if (!manualScrollDetachedRef.current) {
+            if (now - lastScrollTsRef.current < 220 || prev === -1 || Math.abs(idx - prev) > 2) {
+              container.scrollTo({ top, behavior: 'auto' });
+            } else {
+              container.scrollTo({ top, behavior: 'smooth' });
+            }
+            lastScrollTsRef.current = now;
           }
-          lastScrollTsRef.current = now;
+        }
+
+        if (idx !== -1) {
+          applyStates(idx, prev);
         }
       }
 
       if (idx !== -1) {
-        const from = Math.max(0, Math.min(prev === -1 ? idx : prev, idx) - 3);
-        const to = Math.min(lineEls.length - 1, Math.max(prev === -1 ? idx : prev, idx) + 3);
-
-        for (let i = from; i <= to; i++) {
-          let state = '';
-          if (i === idx) state = 'active';
-          else if (i < idx) state = idx - i === 1 ? 'past-near' : 'past';
-          else if (i > idx) state = i - idx === 1 ? 'next-near' : 'next';
-
-          if (lineEls[i].dataset.state !== state) {
-            lineEls[i].dataset.state = state;
-          }
-        }
+        updateLineProgress(idx, time);
       }
-    }, 160);
+    }, 50);
 
     return () => {
       clearInterval(timerId);
@@ -631,14 +725,44 @@ const SyncedLyrics = React.memo(({ lines }: { lines: LyricLine[] }) => {
         {lines.map((line, i) => (
           <div
             key={`${line.time}-${i}`}
-            className="lyric-line cursor-pointer origin-left transition-all duration-500 ease-[var(--ease-apple)] will-change-transform py-2.5 text-[28px] font-bold tracking-tight pr-12 antialiased text-white/20 opacity-45 scale-[0.965] blur-[1.5px] translate-x-0 data-[state=active]:text-white data-[state=active]:opacity-100 data-[state=active]:scale-[1.045] data-[state=active]:blur-0 data-[state=active]:translate-x-0 data-[state=past-near]:text-white/62 data-[state=past-near]:opacity-80 data-[state=past-near]:scale-[0.992] data-[state=past-near]:blur-0 data-[state=past-near]:-translate-x-1.5 data-[state=past]:text-white/18 data-[state=past]:opacity-40 data-[state=past]:scale-[0.972] data-[state=past]:blur-[1.5px] data-[state=past]:-translate-x-3 data-[state=next-near]:text-white/54 data-[state=next-near]:opacity-72 data-[state=next-near]:scale-[0.985] data-[state=next-near]:blur-[0.6px] data-[state=next-near]:translate-x-2 data-[state=next]:text-white/16 data-[state=next]:opacity-30 data-[state=next]:scale-[0.965] data-[state=next]:blur-[1.8px] data-[state=next]:translate-x-4 hover:text-white/60 hover:opacity-90 hover:blur-0"
-            style={{ textRendering: 'optimizeLegibility' }}
+            className="lyric-line group relative cursor-pointer origin-left transition-all duration-500 ease-[var(--ease-apple)] will-change-transform py-2.5 pr-12 text-[28px] font-bold tracking-tight antialiased text-white/22 opacity-40 scale-[0.972] translate-x-0 data-[state=active]:opacity-100 data-[state=active]:scale-[1.02] data-[state=active]:translate-x-0 data-[state=past-near]:opacity-78 data-[state=past-near]:scale-[0.992] data-[state=past-near]:-translate-x-1 data-[state=past]:opacity-48 data-[state=past]:scale-[0.98] data-[state=past]:-translate-x-2 data-[state=next-near]:opacity-66 data-[state=next-near]:scale-[0.988] data-[state=next-near]:translate-x-1.5 data-[state=next]:opacity-28 data-[state=next]:scale-[0.968] data-[state=next]:translate-x-3"
+            style={{ textRendering: 'optimizeLegibility', ['--lyric-progress' as string]: '0%' }}
             onClick={() => {
               manualScrollDetachedRef.current = false;
-              seek(line.time);
+              
+              if (i === activeRef.current) {
+                const container = containerRef.current;
+                const el = lineElsRef.current[i];
+                if (container && el) {
+                  const top = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+                  container.scrollTo({ top, behavior: 'smooth' });
+                }
+              } else {
+                seek(line.time);
+              }
             }}
           >
-            {line.text}
+            <span className="block transition-[filter] duration-300 [filter:drop-shadow(0_0_10px_rgba(255,255,255,0.2))] group-data-[state=active]:[filter:drop-shadow(0_0_18px_rgba(255,255,255,0.38))]">
+              {line.text.split(/(\s+)/).map((word, wordIdx, arr) => {
+                const offset = arr.slice(0, wordIdx).join('').length;
+                return (
+                  <span key={wordIdx} className="inline-block whitespace-pre-wrap">
+                    {Array.from(word).map((char, charIndex) => {
+                      const globalIdx = offset + charIndex;
+                      return (
+                        <span
+                          key={globalIdx}
+                          data-char-index={globalIdx}
+                          className="inline-block transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] text-white/30 data-[char-state=active]:text-white data-[char-state=active]:-translate-y-[0.16em] data-[char-state=active]:scale-[1.06] data-[char-state=active]:drop-shadow-[0_0_10px_rgba(255,255,255,0.38)]"
+                        >
+                          {char}
+                        </span>
+                      );
+                    })}
+                  </span>
+                );
+              })}
+            </span>
           </div>
         ))}
       </div>
@@ -679,7 +803,7 @@ export const LyricsPanel = React.memo(() => {
 
   const { data: lyrics, isLoading } = useQuery({
     queryKey: ['lyrics', track?.urn, reqArtist, reqTitle],
-    queryFn: () => searchLyrics(reqArtist, reqTitle),
+    queryFn: () => searchLyrics(track!.urn, reqArtist, reqTitle),
     enabled: open && !!track,
     staleTime: Number.POSITIVE_INFINITY,
     retry: 1,
@@ -718,7 +842,18 @@ export const LyricsPanel = React.memo(() => {
       </div>
 
       {/* Close */}
-      <div className="relative z-10 flex justify-end px-6 pt-5 pb-2" data-tauri-drag-region>
+      <div className="relative z-10 flex justify-end items-center gap-2 px-6 pt-5 pb-2" data-tauri-drag-region>
+        <button
+          type="button"
+          onClick={() => {
+            close();
+            useArtworkStore.getState().setOpen(true);
+          }}
+          className="h-9 rounded-full px-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-white/45 hover:text-white/80 hover:bg-white/[0.08] transition-all duration-200 cursor-pointer outline-none"
+        >
+          <Maximize2 size={14} />
+          <span>{t('nav.fullscreen', 'Fullscreen')}</span>
+        </button>
         <button
           type="button"
           onClick={close}

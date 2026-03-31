@@ -31,9 +31,9 @@ fn apply_linux_gpu_workarounds() {
 
     println!("[GPU] NVIDIA + Wayland detected, applying WebKitGTK workarounds");
 
-    // Enable DMABUF renderer (WebKitGTK may disable it on NVIDIA by default)
+    // Disable DMABUF renderer — causes white screen / rendering issues on NVIDIA
     if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "0");
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
     // Disable NVIDIA explicit sync — known to cause stuttering with fractional scaling

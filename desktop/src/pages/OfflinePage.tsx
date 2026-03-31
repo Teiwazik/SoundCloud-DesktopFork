@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { listCachedUrns } from '../lib/cache';
+import { listCachedUrns, listCachedLyricsUrns, removeLyricsForTrack } from '../lib/cache';
 import { art, dur } from '../lib/formatters';
 import { fetchAllLikedTracks, invalidateAllLikesCache } from '../lib/hooks';
 import {
@@ -27,6 +27,7 @@ interface OfflineLibraryState {
   likedTracks: Track[];
   cachedTracks: Track[];
   cachedUrns: Set<string>;
+  cachedLyricsUrns: Set<string>;
   updatedAt: number | null;
 }
 
@@ -34,6 +35,7 @@ const EMPTY_STATE: OfflineLibraryState = {
   likedTracks: [],
   cachedTracks: [],
   cachedUrns: new Set(),
+  cachedLyricsUrns: new Set(),
   updatedAt: null,
 };
 
@@ -52,11 +54,15 @@ const OfflineTrackRow = React.memo(function OfflineTrackRow({
   queue,
   canPlay,
   cached,
+  lyricsCached,
+  onClearLyrics,
 }: {
   track: Track;
   queue: Track[];
   canPlay: boolean;
   cached: boolean;
+  lyricsCached: boolean;
+  onClearLyrics: (urn: string) => void;
 }) {
   const { t } = useTranslation();
   const play = usePlayerStore((s) => s.play);
@@ -107,6 +113,21 @@ const OfflineTrackRow = React.memo(function OfflineTrackRow({
       </div>
 
       <div className="hidden shrink-0 items-center gap-2 sm:flex">
+        {lyricsCached && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClearLyrics(track.urn);
+            }}
+            title={t('offline.clearLyrics', 'Clear cached lyrics')}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-sky-400/18 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold text-sky-100/90 hover:bg-sky-400/20 transition-colors"
+          >
+            {t('offline.lyrics', 'Lyrics')}
+            <span className="text-[10px] opacity-70">×</span>
+          </button>
+        )}
+        
         {cached ? (
           <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/18 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-100/90">
             <Download size={11} />
@@ -133,7 +154,9 @@ function OfflineSection({
   items,
   queue,
   cachedUrns,
+  cachedLyricsUrns,
   canPlayTrack,
+  onClearLyrics,
   emptyText,
 }: {
   icon: React.ReactNode;
@@ -142,7 +165,9 @@ function OfflineSection({
   items: Track[];
   queue: Track[];
   cachedUrns: Set<string>;
+  cachedLyricsUrns: Set<string>;
   canPlayTrack: (track: Track) => boolean;
+  onClearLyrics: (urn: string) => void;
   emptyText: string;
 }) {
   return (
@@ -172,6 +197,8 @@ function OfflineSection({
                 queue={queue}
                 canPlay={canPlayTrack(track)}
                 cached={cachedUrns.has(track.urn)}
+                lyricsCached={cachedLyricsUrns.has(track.urn)}
+                onClearLyrics={onClearLyrics}
               />
             ))}
           </div>
@@ -194,19 +221,22 @@ export const OfflinePage = React.memo(() => {
   const [syncing, setSyncing] = useState(false);
 
   const loadOfflineData = useCallback(async () => {
-    const [likedTracks, cachedUrns, updatedAt] = await Promise.all([
+    const [likedTracks, cachedUrns, lyricsUrns, updatedAt] = await Promise.all([
       getOfflineLikedTracks(),
       listCachedUrns(),
+      listCachedLyricsUrns(),
       getOfflineIndexUpdatedAt(),
     ]);
 
     const cachedSet = new Set(cachedUrns);
+    const cachedLyricsSet = new Set(lyricsUrns);
     const cachedTracks = await getOfflineTracksByUrns(cachedUrns);
 
     setState({
       likedTracks,
       cachedTracks,
       cachedUrns: cachedSet,
+      cachedLyricsUrns: cachedLyricsSet,
       updatedAt,
     });
   }, []);
@@ -267,6 +297,15 @@ export const OfflinePage = React.memo(() => {
       setSyncing(false);
     }
   }, [loadOfflineData]);
+
+  const handleClearLyrics = useCallback(async (urn: string) => {
+    await removeLyricsForTrack(urn);
+    setState((prev) => {
+      const nextLyrics = new Set(prev.cachedLyricsUrns);
+      nextLyrics.delete(urn);
+      return { ...prev, cachedLyricsUrns: nextLyrics };
+    });
+  }, []);
 
   const cachedLikesCount = useMemo(
     () => state.likedTracks.filter((track) => state.cachedUrns.has(track.urn)).length,
@@ -332,8 +371,8 @@ export const OfflinePage = React.memo(() => {
         className="pointer-events-none absolute inset-0"
         style={{ contain: 'strict', transform: 'translateZ(0)' }}
       >
-        <div className="absolute left-[-8%] top-[-10%] h-[440px] w-[440px] rounded-full bg-accent/[0.08] blur-[130px]" />
-        <div className="absolute bottom-[-12%] right-[-8%] h-[460px] w-[460px] rounded-full bg-sky-400/[0.05] blur-[150px]" />
+        <div className="absolute left-[-8%] top-[-10%] h-[440px] w-[440px] rounded-full bg-accent/[0.12] blur-[130px]" />
+        <div className="absolute bottom-[-12%] right-[-8%] h-[460px] w-[460px] rounded-full bg-sky-400/[0.08] blur-[150px]" />
       </div>
 
       <div
@@ -421,7 +460,9 @@ export const OfflinePage = React.memo(() => {
               items={state.likedTracks}
               queue={likesQueue}
               cachedUrns={state.cachedUrns}
+              cachedLyricsUrns={state.cachedLyricsUrns}
               canPlayTrack={(track) => appMode === 'online' || state.cachedUrns.has(track.urn)}
+              onClearLyrics={handleClearLyrics}
               emptyText={t('offline.likesEmpty')}
             />
 
@@ -432,7 +473,9 @@ export const OfflinePage = React.memo(() => {
               items={state.cachedTracks}
               queue={cachedQueue}
               cachedUrns={state.cachedUrns}
+              cachedLyricsUrns={state.cachedLyricsUrns}
               canPlayTrack={() => true}
+              onClearLyrics={handleClearLyrics}
               emptyText={t('offline.cachedEmpty')}
             />
           </div>

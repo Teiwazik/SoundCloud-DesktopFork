@@ -7,7 +7,8 @@
     "following": "Подписки",
     "settings": "Настройки",
     "collapse": "Свернуть",
-    "expand": "Развернуть"
+    "expand": "Развернуть",
+    "fullscreen": "Во весь экран"
   },
   "player": {
     "queue": "Очередь",
@@ -61,6 +62,7 @@
     "lyricsLoading": "Ищем текст...",
     "download": "Скачать",
     "downloaded": "Скачано",
+    "artwork": "Обложка",
     "preview": "Превью",
     "dislike": "Больше не проигрывать этот трек",
     "moodCorrection": "Скорректировать настроение",
@@ -159,6 +161,10 @@
     "cacheAllLikedDone": "Закэшировано: {{completed}}, пропущено: {{skipped}}, ошибок: {{failed}}",
     "startCaching": "Начать",
     "cachingNow": "Кэшируем...",
+    "loading": "Загрузка...",
+    "loadingTracks": "Загрузка списка треков...",
+    "cacheProgress": "Прогресс",
+    "lyricsCacheSize": "Кэш текстов песен",
     "appearance": "Оформление",
     "accentColor": "Цвет акцента",
     "backgroundImage": "Фоновое изображение",
@@ -182,8 +188,10 @@
     "apiModeAuto": "Автоматический",
     "apiModeCustom": "Свой",
     "currentApiServer": "Текущий API сервер",
-    "customApiPlaceholder": "https://your-api.example.com",
-    "customApiInvalid": "Введите корректный URL API",
+    "customApiPlaceholder": "https://api.example.com",
+    "customApiInvalid": "Введите валидный URL (https://...)",
+    "apiSetupInfo": "Данные для настройки API",
+    "apiSetupDesc": "Скопируйте эту строку запроса, чтобы идентифицировать шаблоны трафика SoundCloud, если ваш прокси требует специфической идентификации клиента.",
     "themePreset": "Тема",
     "theme_soundcloud": "SoundCloud",
     "theme_dark": "Тёмная",
@@ -427,7 +435,9 @@
     "cachedEmpty": "Кэш пока пуст. Воспроизведите или скачайте треки онлайн, и они появятся здесь.",
     "cached": "В кэше",
     "notCached": "Не скачан",
-    "syncNow": "Синхронизировать"
+    "syncNow": "Синхронизировать",
+    "lyrics": "Текст",
+    "clearLyrics": "Удалить кэш текста"
   },
   "common": {
     "loading": "Загрузка...",

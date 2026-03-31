@@ -10,6 +10,7 @@ import { isTauriRuntime } from './runtime';
 const AUDIO_DIR = 'audio';
 const ASSETS_DIR = 'assets';
 const WALLPAPERS_DIR = 'wallpapers';
+const LYRICS_DIR = 'lyrics';
 const MIN_AUDIO_SIZE = 8192;
 
 let cacheBasePath: string | null = null;
@@ -405,6 +406,127 @@ export function getWallpaperUrl(name: string): string | null {
   const port = getStaticPort();
   if (!port) return null;
   return `http://127.0.0.1:${port}/wallpapers/${encodeURIComponent(name)}`;
+}
+
+/* ── Lyrics cache ────────────────────────────────────────── */
+
+let lyricsBasePath: string | null = null;
+
+async function getLyricsDir(): Promise<string> {
+  if (!isTauriRuntime()) return '';
+  if (lyricsBasePath) return lyricsBasePath;
+  const base = await appCacheDir();
+  lyricsBasePath = await join(base, LYRICS_DIR);
+  await mkdir(lyricsBasePath, { recursive: true });
+  return lyricsBasePath;
+}
+
+function urnToLyricsFilename(urn: string): string {
+  return `${urn.replace(/:/g, '_')}.json`;
+}
+
+export async function saveLyricsToCache(urn: string, data: any): Promise<void> {
+  if (!isTauriRuntime()) return;
+  try {
+    const dir = await getLyricsDir();
+    const path = await join(dir, urnToLyricsFilename(urn));
+    const encoder = new TextEncoder();
+    await writeFile(path, encoder.encode(JSON.stringify(data)));
+  } catch (e) {
+    console.error('Failed to save lyrics cache', e);
+  }
+}
+
+export async function loadLyricsFromCache(urn: string): Promise<any | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    const dir = await getLyricsDir();
+    const path = await join(dir, urnToLyricsFilename(urn));
+    if (!(await exists(path))) return null;
+    
+    // Tauri v2 plugin-fs has readTextFile
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+    const text = await readTextFile(path);
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export async function isLyricsCached(urn: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  try {
+    const dir = await getLyricsDir();
+    const path = await join(dir, urnToLyricsFilename(urn));
+    return await exists(path);
+  } catch {
+    return false;
+  }
+}
+
+export async function removeLyricsForTrack(urn: string): Promise<void> {
+  if (!isTauriRuntime()) return;
+  try {
+    const dir = await getLyricsDir();
+    const path = await join(dir, urnToLyricsFilename(urn));
+    if (await exists(path)) {
+      await remove(path);
+    }
+  } catch {}
+}
+
+export async function listCachedLyricsUrns(): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    const dir = await getLyricsDir();
+    const entries = await readDir(dir);
+    const urns: string[] = [];
+
+    for (const entry of entries) {
+      if (!entry.name || !entry.isFile) continue;
+      if (entry.name.endsWith('.json')) {
+        const urn = entry.name.slice(0, -5).replace(/_/g, ':');
+        urns.push(urn);
+      }
+    }
+
+    return urns;
+  } catch {
+    return [];
+  }
+}
+
+export async function getLyricsCacheSize(): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+  try {
+    const dir = await getLyricsDir();
+    const entries = await readDir(dir);
+    let total = 0;
+    for (const entry of entries) {
+      if (entry.name && entry.isFile) {
+        const info = await stat(`${dir}/${entry.name}`);
+        total += info.size;
+      }
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
+export async function clearLyricsCache(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  try {
+    const dir = await getLyricsDir();
+    const entries = await readDir(dir);
+    for (const entry of entries) {
+      if (entry.name && entry.isFile) {
+        await remove(`${dir}/${entry.name}`).catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.error('clearLyricsCache failed:', e);
+  }
 }
 
 /* ── Track Download ──────────────────────────────────────── */

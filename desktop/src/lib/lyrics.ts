@@ -1,6 +1,6 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { tauriStorage } from './tauri-storage';
+import { saveLyricsToCache, loadLyricsFromCache } from './cache';
 
 const LRCLIB_API = 'https://lrclib.net/api';
 const LYRICS_OVH_API = 'https://api.lyrics.ovh/v1';
@@ -9,9 +9,6 @@ const TEXTYL_API = 'https://api.textyl.co/api/lyrics';
 const MUSIXMATCH_API = 'https://apic-desktop.musixmatch.com/ws/1.1';
 const TIMEOUT_MS = 10000;
 const ENABLE_NCM = (import.meta.env.VITE_LYRICS_NCM || '').toLowerCase() === 'true';
-const LYRICS_CACHE_KEY = 'lyrics-cache-v1';
-const LYRICS_CACHE_LIMIT = 400;
-
 export interface LyricLine {
   time: number;
   text: string;
@@ -25,62 +22,7 @@ export interface LyricsResult {
   source: LyricsSource;
 }
 
-type CachedLyricsEntry = LyricsResult | null;
-
-let lyricsCacheLoaded = false;
-let lyricsCacheLoadPromise: Promise<void> | null = null;
-const lyricsCache = new Map<string, CachedLyricsEntry>();
 let musixmatchTokenPromise: Promise<string | null> | null = null;
-
-function makeCacheKey(scUsername: string, scTitle: string) {
-  return `${scUsername.trim().toLowerCase()}::${scTitle.trim().toLowerCase()}`;
-}
-
-async function ensureLyricsCacheLoaded() {
-  if (lyricsCacheLoaded) return;
-  if (!lyricsCacheLoadPromise) {
-    lyricsCacheLoadPromise = (async () => {
-      try {
-        const raw = await tauriStorage.getItem(LYRICS_CACHE_KEY);
-        if (!raw) return;
-
-        const parsed = JSON.parse(raw) as Array<[string, CachedLyricsEntry]>;
-        if (!Array.isArray(parsed)) return;
-
-        for (const entry of parsed) {
-          if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
-          lyricsCache.set(entry[0], entry[1] ?? null);
-        }
-      } catch {
-        // ignore broken cache
-      } finally {
-        lyricsCacheLoaded = true;
-      }
-    })();
-  }
-
-  await lyricsCacheLoadPromise;
-}
-
-function persistLyricsCache() {
-  void tauriStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify([...lyricsCache.entries()]));
-}
-
-function setCachedLyrics(key: string, value: CachedLyricsEntry) {
-  if (lyricsCache.has(key)) {
-    lyricsCache.delete(key);
-  }
-
-  lyricsCache.set(key, value);
-
-  while (lyricsCache.size > LYRICS_CACHE_LIMIT) {
-    const oldestKey = lyricsCache.keys().next().value;
-    if (!oldestKey) break;
-    lyricsCache.delete(oldestKey);
-  }
-
-  persistLyricsCache();
-}
 
 async function requestText(url: string, signal?: AbortSignal): Promise<string> {
   if (!isTauri()) {
@@ -456,14 +398,13 @@ async function searchTextyl(
 // ── Main export ───────────────────────────────────────────────
 
 export async function searchLyrics(
+  trackUrn: string,
   scUsername: string,
   scTitle: string,
 ): Promise<LyricsResult | null> {
-  await ensureLyricsCacheLoaded();
-
-  const cacheKey = makeCacheKey(scUsername, scTitle);
-  if (lyricsCache.has(cacheKey)) {
-    return lyricsCache.get(cacheKey) ?? null;
+  const cached = await loadLyricsFromCache(trackUrn);
+  if (cached) {
+    return cached;
   }
 
   const controller = new AbortController();
@@ -495,14 +436,14 @@ export async function searchLyrics(
 
     let res = await runChain(artist, title);
     if (res) {
-      setCachedLyrics(cacheKey, res);
+      await saveLyricsToCache(trackUrn, res);
       return res;
     }
 
     if (parsed) {
       res = await runChain(scUsername, scTitle);
       if (res) {
-        setCachedLyrics(cacheKey, res);
+        await saveLyricsToCache(trackUrn, res);
         return res;
       }
     }
@@ -511,14 +452,14 @@ export async function searchLyrics(
     if (artist !== '') {
       res = await runChain('', title);
       if (res) {
-        setCachedLyrics(cacheKey, res);
+        await saveLyricsToCache(trackUrn, res);
         return res;
       }
 
       if (scTitle !== title) {
         res = await runChain('', scTitle);
         if (res) {
-          setCachedLyrics(cacheKey, res);
+          await saveLyricsToCache(trackUrn, res);
           return res;
         }
       }
@@ -532,7 +473,7 @@ export async function searchLyrics(
       if (artistNoBrackets && titleNoBrackets) {
         res = await runChain(artistNoBrackets, titleNoBrackets);
         if (res) {
-          setCachedLyrics(cacheKey, res);
+          await saveLyricsToCache(trackUrn, res);
           return res;
         }
       }
@@ -540,13 +481,12 @@ export async function searchLyrics(
       if (titleNoBrackets) {
         res = await runChain('', titleNoBrackets);
         if (res) {
-          setCachedLyrics(cacheKey, res);
+          await saveLyricsToCache(trackUrn, res);
           return res;
         }
       }
     }
 
-    setCachedLyrics(cacheKey, null);
     return null;
   } finally {
     clearTimeout(tid);

@@ -19,9 +19,9 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { art } from '../../lib/formatters';
 import { Pause, Play, Settings } from '../../lib/icons';
 import { SUPPORTED_LANGUAGES } from '../../lib/language-detection';
 import { usePlayerStore } from '../../stores/player';
@@ -109,11 +109,13 @@ interface Blob {
   y: number;
   vx: number;
   vy: number;
+  baseR: number;
   r: number;
   color: number[];
   phase: number;
   wobble: number;
   wobbleSpd: number;
+  angleOffset: number;
 }
 
 export const SoundWaveHero: React.FC = () => {
@@ -299,7 +301,7 @@ export const SoundWaveHero: React.FC = () => {
     };
   }, [isLanguageMenuOpen]);
 
-  // Animation logic
+  // Animation logic — reactive to audio
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -308,40 +310,86 @@ export const SoundWaveHero: React.FC = () => {
 
     let animationFrameId: number;
     let lastFrameTime = 0;
+    let unlistenAudio: (() => void) | null = null;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const blobs: Blob[] = [];
-    const blobCount = reducedMotion ? 2 : 4;
+    const blobCount = reducedMotion ? 3 : 5;
+
+    // Smoothed audio energy bands
+    const energy = { bass: 0, mid: 0, high: 0, overall: 0 };
+    const targetEnergy = { bass: 0, mid: 0, high: 0, overall: 0 };
+
+    // Subscribe to audio visualizer data from Tauri
+    const setupAudio = async () => {
+      try {
+        const fn = await listen<number[]>('audio:visualizer', (ev) => {
+          const d = ev.payload;
+          if (!d || d.length === 0) return;
+          const len = d.length;
+          // Bass: bins 0-3, Mid: bins 4-15, High: bins 16+
+          let bass = 0, mid = 0, high = 0;
+          for (let i = 0; i < Math.min(4, len); i++) bass += d[i];
+          bass /= Math.min(4, len);
+          for (let i = 4; i < Math.min(16, len); i++) mid += d[i];
+          mid /= Math.min(12, len - 4);
+          for (let i = 16; i < len; i++) high += d[i];
+          high /= Math.max(1, len - 16);
+          targetEnergy.bass = bass / 255;
+          targetEnergy.mid = mid / 255;
+          targetEnergy.high = high / 255;
+          targetEnergy.overall = (bass * 0.5 + mid * 0.35 + high * 0.15) / 255;
+        });
+        unlistenAudio = fn;
+      } catch { /* noop */ }
+    };
+    setupAudio();
 
     const resize = () => {
-      canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-      canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      const w = canvas.offsetWidth;
+      const h = canvas.offsetHeight;
+      if (w === 0 || h === 0) return;
+      const dpr = window.devicePixelRatio;
+      const newW = Math.round(w * dpr);
+      const newH = Math.round(h * dpr);
+      if (canvas.width === newW && canvas.height === newH) return;
+      canvas.width = newW;
+      canvas.height = newH;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
-    window.addEventListener('resize', resize);
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
     resize();
 
-    // SoundWave colors
-    const colors = [
-      [255, 85, 0], // SoundCloud Orange
-      [255, 45, 85], // Pinkish
+    // Default warm palette
+    const defaultColors = [
+      [255, 85, 0],   // SoundCloud Orange
+      [255, 45, 85],  // Pink
       [191, 90, 242], // Purple
-      [94, 92, 230], // Blue
-      [255, 159, 10], // Orange
-      [255, 69, 58], // Red
+      [94, 92, 230],  // Blue
+      [255, 159, 10], // Amber
     ];
 
+    const w0 = canvas.offsetWidth || 400;
+    const h0 = canvas.offsetHeight || 220;
+    const cx = w0 / 2;
+    const cy = h0 / 2;
+
     for (let i = 0; i < blobCount; i++) {
+      const angle = (i / blobCount) * Math.PI * 2;
+      const dist = 30 + Math.random() * 40;
       blobs.push({
-        x: Math.random() * canvas.offsetWidth,
-        y: Math.random() * canvas.offsetHeight,
-        vx: (Math.random() - 0.5) * 0.8,
-        vy: (Math.random() - 0.5) * 0.8,
-        r: 100 + Math.random() * 150,
-        color: colors[i % colors.length],
-        phase: Math.random() * Math.PI * 2,
+        x: cx + Math.cos(angle) * dist,
+        y: cy + Math.sin(angle) * dist,
+        vx: (Math.random() - 0.5) * 0.6,
+        vy: (Math.random() - 0.5) * 0.6,
+        baseR: 70 + Math.random() * 80,
+        r: 70 + Math.random() * 80,
+        color: defaultColors[i % defaultColors.length],
+        phase: (i / blobCount) * Math.PI * 2,
         wobble: 0,
-        wobbleSpd: 0.02 + Math.random() * 0.03,
+        wobbleSpd: 0.015 + Math.random() * 0.025,
+        angleOffset: angle,
       });
     }
 
@@ -359,7 +407,7 @@ export const SoundWaveHero: React.FC = () => {
       }
 
       const isActuallyPlaying = isPlaying && isActive;
-      const targetFps = reducedMotion ? 6 : isActuallyPlaying ? 24 : 2;
+      const targetFps = reducedMotion ? 8 : isActuallyPlaying ? 30 : 4;
       const frameInterval = 1000 / targetFps;
       if (ts - lastFrameTime < frameInterval) {
         animationFrameId = requestAnimationFrame(draw);
@@ -367,41 +415,95 @@ export const SoundWaveHero: React.FC = () => {
       }
       lastFrameTime = ts;
 
+      // Smooth energy towards target
+      const lerpRate = 0.18;
+      energy.bass += (targetEnergy.bass - energy.bass) * lerpRate;
+      energy.mid += (targetEnergy.mid - energy.mid) * lerpRate;
+      energy.high += (targetEnergy.high - energy.high) * lerpRate;
+      energy.overall += (targetEnergy.overall - energy.overall) * lerpRate;
+
+      // Decay target when not playing
+      if (!isActuallyPlaying) {
+        targetEnergy.bass *= 0.92;
+        targetEnergy.mid *= 0.92;
+        targetEnergy.high *= 0.92;
+        targetEnergy.overall *= 0.92;
+      }
+
       ctx.clearRect(0, 0, w, h);
-      ctx.filter = reducedMotion ? 'blur(24px)' : 'blur(36px)';
+      ctx.filter = reducedMotion ? 'blur(28px)' : 'blur(44px)';
       ctx.globalCompositeOperation = 'screen';
 
-      const speedMult = isActuallyPlaying ? 1.5 : 0.08;
+      const speedMult = isActuallyPlaying ? 1.2 + energy.overall * 2 : 0.06;
+      const centerX = w / 2;
+      const centerY = h / 2;
 
-      blobs.forEach((b) => {
-        b.x += b.vx * speedMult;
-        b.y += b.vy * speedMult;
+      blobs.forEach((b, i) => {
         b.phase += b.wobbleSpd * speedMult;
-        b.wobble = Math.sin(b.phase) * 20;
 
-        if (b.x < -b.r) b.x = w + b.r;
-        if (b.x > w + b.r) b.x = -b.r;
-        if (b.y < -b.r) b.y = h + b.r;
-        if (b.y > h + b.r) b.y = -b.r;
+        // Bass makes blobs pulse in size
+        const bassPulse = energy.bass * 60;
+        // Mid makes blobs wobble
+        const midWobble = energy.mid * 35;
+        // High makes them shimmer
+        const highShimmer = energy.high * 15;
 
-        const gradient = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r + b.wobble);
-        const opacity = isActuallyPlaying ? 0.4 : 0.15;
-        gradient.addColorStop(0, `rgba(${b.color[0]}, ${b.color[1]}, ${b.color[2]}, ${opacity})`);
-        gradient.addColorStop(1, `rgba(${b.color[0]}, ${b.color[1]}, ${b.color[2]}, 0)`);
+        b.r = b.baseR + bassPulse + Math.sin(b.phase * 2.3 + i) * midWobble;
+        b.wobble = Math.sin(b.phase) * (12 + highShimmer);
+
+        // Orbital motion around center + drift
+        const orbitSpeed = isActuallyPlaying ? 0.0008 + energy.overall * 0.003 : 0.0002;
+        b.angleOffset += orbitSpeed * (i % 2 === 0 ? 1 : -1);
+        const orbitRadius = 40 + energy.bass * 80 + Math.sin(b.phase * 0.7) * 20;
+
+        const targetX = centerX + Math.cos(b.angleOffset) * orbitRadius;
+        const targetY = centerY + Math.sin(b.angleOffset) * orbitRadius;
+
+        // Smooth move towards orbital position
+        b.x += (targetX - b.x) * 0.03 + b.vx * speedMult;
+        b.y += (targetY - b.y) * 0.03 + b.vy * speedMult;
+
+        // Keep in bounds softly
+        if (b.x < -b.r * 0.5) b.x = -b.r * 0.5;
+        if (b.x > w + b.r * 0.5) b.x = w + b.r * 0.5;
+        if (b.y < -b.r * 0.5) b.y = -b.r * 0.5;
+        if (b.y > h + b.r * 0.5) b.y = h + b.r * 0.5;
+
+        const effectiveR = Math.max(10, b.r + b.wobble);
+        const gradient = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, effectiveR);
+        const baseOpacity = isActuallyPlaying ? 0.25 + energy.overall * 0.35 : 0.1;
+        const [cr, cg, cb] = b.color;
+        gradient.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${baseOpacity})`);
+        gradient.addColorStop(0.5, `rgba(${cr}, ${cg}, ${cb}, ${baseOpacity * 0.5})`);
+        gradient.addColorStop(1, `rgba(${cr}, ${cg}, ${cb}, 0)`);
 
         ctx.fillStyle = gradient;
         ctx.beginPath();
-        ctx.arc(b.x, b.y, b.r + b.wobble, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, effectiveR, 0, Math.PI * 2);
         ctx.fill();
       });
+
+      // Central glow — reacts to overall energy
+      if (isActuallyPlaying && energy.overall > 0.05) {
+        const glowR = 60 + energy.overall * 100;
+        const glowGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowR);
+        const glowAlpha = energy.overall * 0.18;
+        glowGrad.addColorStop(0, `rgba(255, 255, 255, ${glowAlpha})`);
+        glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glowGrad;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, glowR, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       animationFrameId = requestAnimationFrame(draw);
     };
 
     animationFrameId = requestAnimationFrame(draw);
     return () => {
-      window.removeEventListener('resize', resize);
+      ro.disconnect();
       cancelAnimationFrame(animationFrameId);
+      unlistenAudio?.();
     };
   }, [isPlaying, isActive]);
 
@@ -542,7 +644,6 @@ export const SoundWaveHero: React.FC = () => {
   };
   const heroSecondaryButtonClass =
     'flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/10 border border-white/10 text-white/70 text-sm font-medium transition-all duration-300 hover:bg-white/20 hover:text-white active:scale-95';
-  const currentTrackArtwork = currentTrack?.artwork_url ? art(currentTrack.artwork_url, 't300x300') : null;
 
   return (
     <div className="relative w-full h-[220px] rounded-3xl overflow-hidden group/sw border border-white/[0.04] shadow-2xl bg-[#0a0a0c]">
@@ -566,34 +667,6 @@ export const SoundWaveHero: React.FC = () => {
 
       {/* Content overlay */}
       <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-transparent via-transparent to-black/20">
-        {soundwaveTrackVisual && currentTrack && currentTrackArtwork && (
-          <div className="absolute left-5 top-5 z-10 hidden sm:flex items-center gap-3 rounded-[24px] border border-white/10 bg-black/25 px-3 py-3 backdrop-blur-2xl shadow-[0_18px_40px_rgba(0,0,0,0.28)]">
-            <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/10">
-              <img src={currentTrackArtwork} alt="" className="h-full w-full object-cover" />
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.16),transparent_58%)]" />
-            </div>
-            <div className="min-w-0 max-w-[180px]">
-              <p className="truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">
-                {t('settings.soundwaveNowPlaying')}
-              </p>
-              <p className="mt-1 truncate text-[13px] font-semibold text-white/90">{currentTrack.title}</p>
-              <p className="truncate text-[11px] text-white/45">{currentTrack.user.username}</p>
-              <div className="mt-2 flex items-end gap-1.5 h-8">
-                {[0, 1, 2, 3, 4].map((bar) => (
-                  <span
-                    key={bar}
-                    className={`w-1.5 rounded-full bg-white/75 ${isWavePlaying ? 'animate-[soundwavePulse_1.1s_ease-in-out_infinite]' : ''}`}
-                    style={{
-                      height: `${14 + ((bar * 7) % 18)}px`,
-                      animationDelay: `${bar * 0.12}s`,
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
         <div
           className={`mb-6 flex flex-col items-center gap-1.5 max-w-[88%] ${
             hasGenreSubtitle ? 'mt-2' : ''

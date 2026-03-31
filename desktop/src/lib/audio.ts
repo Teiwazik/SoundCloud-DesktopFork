@@ -27,6 +27,8 @@ let stallRecoveryInFlight = false;
 let stallSuppressedUntil = 0;
 let endedGuardUntil = 0;
 let deviceChangeCooldownUntil = 0;
+let seekTargetTime = -1;
+let seekPendingUntil = 0;
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -97,20 +99,29 @@ export function seek(seconds: number) {
   const target = Math.max(0, Math.min(seconds, maxSeek));
 
   endedGuardUntil = Date.now() + 2200;
+  seekTargetTime = target;
+  seekPendingUntil = Date.now() + 3000;
   suppressStallDetection(3200);
   hasTrack = true;
   if (isTauriRuntime()) {
-    invoke('audio_seek', { position: target }).catch(async (error) => {
-      console.warn('[Audio] seek failed, trying recover...', error);
-      try {
-        suppressStallDetection(4200);
-        await reloadCurrentTrack();
-        await invoke('audio_seek', { position: target });
-        hasTrack = true;
-      } catch (recoveryError) {
-        console.error('[Audio] seek recovery failed', recoveryError);
-      }
-    });
+    invoke('audio_seek', { position: target })
+      .then(() => {
+        seekPendingUntil = Date.now() + 400;
+      })
+      .catch(async (error) => {
+        console.warn('[Audio] seek failed, trying recover...', error);
+        try {
+          suppressStallDetection(4200);
+          seekPendingUntil = Date.now() + 5000;
+          await reloadCurrentTrack();
+          await invoke('audio_seek', { position: target });
+          seekPendingUntil = Date.now() + 400;
+          hasTrack = true;
+        } catch (recoveryError) {
+          console.error('[Audio] seek recovery failed', recoveryError);
+          seekPendingUntil = 0;
+        }
+      });
   }
   cachedTime = target;
   lastSmoothTime = target;
@@ -145,7 +156,9 @@ export async function reloadCurrentTrack() {
   if (!track) return;
   suppressStallDetection(4500);
   const wasPlaying = usePlayerStore.getState().isPlaying;
-  const pos = cachedTime;
+  // If a seek is pending, use the seek target instead of cachedTime
+  // (cachedTime may have been overwritten by stale ticks from the old position)
+  const pos = seekPendingUntil > Date.now() && seekTargetTime >= 0 ? seekTargetTime : cachedTime;
   await loadTrack(track);
   if (pos > 0) seek(pos);
   if (!wasPlaying) invoke('audio_pause').catch(console.error);
@@ -162,6 +175,8 @@ async function loadTrack(track: Track, skipStop = false) {
   cachedDuration = fallbackDuration;
   cachedTime = 0;
   lastSmoothTime = 0;
+  seekTargetTime = -1;
+  seekPendingUntil = 0;
   usePlayerStore.getState().setCurrentTrackStreamQuality(undefined);
   usePlayerStore.getState().setCurrentTrackStreamCodec(undefined);
   notify();
@@ -445,7 +460,21 @@ function setupTauriBindings() {
   tauriBindingsReady = true;
 
   listen<number>('audio:tick', (event) => {
-    cachedTime = event.payload;
+    const tickPos = event.payload;
+
+    // Reject stale ticks from old position while seek is in progress
+    if (seekPendingUntil > Date.now() && seekTargetTime >= 0) {
+      const drift = Math.abs(tickPos - seekTargetTime);
+      if (drift > 2.0) {
+        // Stale tick from pre-seek position — ignore it
+        return;
+      }
+      // Tick is close to target — seek has landed, clear the guard
+      seekPendingUntil = 0;
+      seekTargetTime = -1;
+    }
+
+    cachedTime = tickPos;
     lastTickAt = Date.now();
     if (cachedDuration <= 0) cachedDuration = fallbackDuration;
     notify();

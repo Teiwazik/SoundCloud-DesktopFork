@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { tauriStorage } from '../lib/tauri-storage';
 
-const ENCODED_QDRANT_URL = 'aHR0cHM6Ly9hZDkzOTEzOS00ODE5LTRkM2EtYjJhMS0xMTQ3YTAzZjU5YWMuc2EtZWFzdC0xLTAuYXdzLmNvdXJkLnFkcmFudC5pbyA2MzMz';
+const ENCODED_QDRANT_URL = 'aHR0cHM6Ly9hZDkzOTEzOS00ODE5LTRkM2EtYjJhMS0xMTQ3YTAzZjU5YWMuc2EtZWFzdC0xLTAuYXdzLmNvdXJkLnFkcmFudC5pby8=';
 const ENCODED_QDRANT_KEY =
   'ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SmhZMk5sYzNNaU9pSnRJbjAuZ3ZTVlZEbFNEMms1OWxDb2ktSms2bFQtUUVPXzRYbXBVQmJ6eDNEdDRTOA==';
 const ENCODED_QDRANT_COLLECTION = 'c3dfMTI=';
@@ -108,7 +108,7 @@ export interface SettingsState {
   youtubeClientId: string;
   youtubeClientSecret: string;
   apiMode: ApiMode;
-  customApiBase: string;
+  customApiKey: string;
   sidebarCollapsed: boolean;
   crossfadeEnabled: boolean;
   crossfadeDuration: number;
@@ -170,7 +170,7 @@ export interface SettingsState {
   setYoutubeClientId: (id: string) => void;
   setYoutubeClientSecret: (secret: string) => void;
   setApiMode: (mode: ApiMode) => void;
-  setCustomApiBase: (url: string) => void;
+  setCustomApiKey: (key: string) => void;
   setCrossfadeEnabled: (v: boolean) => void;
   setCrossfadeDuration: (v: number) => void;
   toggleSidebar: () => void;
@@ -259,7 +259,7 @@ const DEFAULTS = {
   youtubeClientId: '',
   youtubeClientSecret: '',
   apiMode: 'auto' as ApiMode,
-  customApiBase: '',
+  customApiKey: '',
   crossfadeEnabled: false,
   crossfadeDuration: 6,
   sidebarCollapsed: false,
@@ -350,7 +350,7 @@ export const useSettingsStore = create<SettingsState>()(
       setYoutubeClientId: (youtubeClientId) => set({ youtubeClientId }),
       setYoutubeClientSecret: (youtubeClientSecret) => set({ youtubeClientSecret }),
       setApiMode: (apiMode) => set({ apiMode }),
-      setCustomApiBase: (customApiBase) => set({ customApiBase }),
+      setCustomApiKey: (customApiKey) => set({ customApiKey }),
       setCrossfadeEnabled: (crossfadeEnabled) => set({ crossfadeEnabled }),
       setCrossfadeDuration: (crossfadeDuration) => set({ crossfadeDuration }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -471,7 +471,7 @@ export const useSettingsStore = create<SettingsState>()(
         youtubeClientId: s.youtubeClientId,
         youtubeClientSecret: s.youtubeClientSecret,
         apiMode: s.apiMode,
-        customApiBase: s.customApiBase,
+        customApiKey: s.customApiKey,
         sidebarCollapsed: s.sidebarCollapsed,
         crossfadeEnabled: s.crossfadeEnabled,
         crossfadeDuration: s.crossfadeDuration,
