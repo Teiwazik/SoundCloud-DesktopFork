@@ -43,6 +43,10 @@
   <img src="https://raw.githubusercontent.com/Teiwazik/SoundCloud-DesktopFork/main/downloads-chart.svg" alt="Downloads chart" width="800"/>
 </p>
 
+<p align="center">
+  Актуально для <b>v6.1.15</b> · <b>1024</b> total downloads · <b>3</b> stars
+</p>
+
 ---
 
 ## Что это
@@ -183,3 +187,9 @@ cargo check
 MIT, см. файл `LICENSE`.
 
 SoundCloud — торговая марка SoundCloud Ltd. Проект не аффилирован с SoundCloud.
+
+---
+
+## Теги
+
+`soundcloud` `soundcloud-client` `desktop-app` `tauri` `react` `typescript` `rust` `cross-platform` `music-player` `music-streaming` `fork` `soundcloud-fork` `windows` `linux` `macos` `geo-unblock` `proxy` `ad-blocker`
