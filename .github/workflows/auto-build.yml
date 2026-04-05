@@ -73,13 +73,16 @@ jobs:
             exit 1
           fi
 
-          if [ -n "${EXACT_VERSION:-}" ]; then
+          if [ -n "${EXACT_VERSION:-}" ] && [ "$CURRENT_VERSION" = "$EXACT_VERSION" ]; then
+            NEW_VERSION="$CURRENT_VERSION"
+          elif [ -n "${EXACT_VERSION:-}" ]; then
             npm version "$EXACT_VERSION" --no-git-tag-version --allow-same-version
+            NEW_VERSION=$(node -p "require('./package.json').version")
           else
             npm version "$CURRENT_VERSION" --no-git-tag-version --allow-same-version
             npm version "$RELEASE_TYPE" --no-git-tag-version
+            NEW_VERSION=$(node -p "require('./package.json').version")
           fi
-          NEW_VERSION=$(node -p "require('./package.json').version")
           cd ..
 
           sed -i "s/\"version\": \".*\"/\"version\": \"$NEW_VERSION\"/" desktop/src-tauri/tauri.conf.json
@@ -89,7 +92,7 @@ jobs:
           echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
           if ! git diff --quiet; then
-            git add desktop/package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
+            git add desktop/package.json desktop/package-lock.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
             git push origin HEAD:${{ github.ref_name }}
           fi
