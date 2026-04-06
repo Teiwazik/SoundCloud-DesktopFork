@@ -5,7 +5,7 @@ import i18n from '../i18n';
 import { useAppStatusStore } from '../stores/app-status';
 import { useSettingsStore } from '../stores/settings';
 import { waitForAuthHydration } from './auth-hydration';
-import { buildApiUrl, getApiBase } from './constants';
+import { buildApiUrl, STREAMING_BASE } from './constants';
 
 let sessionId: string | null = null;
 let rateLimitUntil = 0;
@@ -229,7 +229,7 @@ export function streamUrl(
   if (sessionId) {
     params.set('session_id', sessionId);
   }
-  return `${getApiBase()}/tracks/${encodeURIComponent(trackUrn)}/stream?${params.toString()}`;
+  return `${STREAMING_BASE}/stream/${encodeURIComponent(trackUrn)}?${params.toString()}`;
 }
 
 export type ApiRequestOptions = RequestInit & {
