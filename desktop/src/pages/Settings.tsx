@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Skeleton } from '../components/ui/Skeleton.tsx';
+import { useArtworkGradientPalette } from '../lib/artwork-palette';
 import { reloadCurrentTrack } from '../lib/audio';
 import { DEFAULT_API_BASE, getApiBase } from '../lib/constants';
 import {
@@ -32,6 +33,7 @@ import {
   type ThemeGradientAnimation,
   type ThemeGradientType,
 } from '../stores/settings';
+import { usePlayerStore } from '../stores/player';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -282,14 +284,14 @@ const CacheSection = React.memo(function CacheSection() {
         <div className="min-w-0">
           <p className="text-[13px] text-white/70 font-medium">{t('settings.cacheAllLiked')}</p>
           <p className="text-[11px] text-white/30">
-            {cachingLikes 
+            {cachingLikes
               ? t('settings.loadingTracks', 'Loading tracks list...')
               : cacheTask.status !== 'idle'
                 ? `${t('settings.cacheProgress', 'Progress')}: ${cacheTask.completed + cacheTask.skipped} / ${cacheTask.total} (${cacheTask.failed} failed)`
                 : t('settings.cacheAllLikedDesc')}
           </p>
         </div>
-        
+
         <div className="flex items-center gap-2">
           {cacheTask.status === 'idle' ? (
             <button
@@ -580,9 +582,7 @@ function ThemeColorField({
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <label className="text-[13px] text-white/50 font-medium">{label}</label>
-        <span className="text-[11px] text-white/30 font-mono uppercase tracking-wide">
-          {value}
-        </span>
+        <span className="text-[11px] text-white/30 font-mono uppercase tracking-wide">{value}</span>
       </div>
       <div className="flex items-center gap-2 flex-wrap">
         {PRESET_COLORS.map((color) => (
@@ -621,6 +621,7 @@ const ThemeSection = React.memo(function ThemeSection() {
   const bgPrimary = useSettingsStore((s) => s.bgPrimary);
   const themePreset = useSettingsStore((s) => s.themePreset);
   const themeGradientEnabled = useSettingsStore((s) => s.themeGradientEnabled);
+  const themeGradientFollowArtwork = useSettingsStore((s) => s.themeGradientFollowArtwork);
   const themeGradientType = useSettingsStore((s) => s.themeGradientType);
   const themeGradientColorA = useSettingsStore((s) => s.themeGradientColorA);
   const themeGradientColorB = useSettingsStore((s) => s.themeGradientColorB);
@@ -638,6 +639,7 @@ const ThemeSection = React.memo(function ThemeSection() {
   const setBgPrimary = useSettingsStore((s) => s.setBgPrimary);
   const setThemePreset = useSettingsStore((s) => s.setThemePreset);
   const setThemeGradientEnabled = useSettingsStore((s) => s.setThemeGradientEnabled);
+  const setThemeGradientFollowArtwork = useSettingsStore((s) => s.setThemeGradientFollowArtwork);
   const setThemeGradientType = useSettingsStore((s) => s.setThemeGradientType);
   const setThemeGradientColorA = useSettingsStore((s) => s.setThemeGradientColorA);
   const setThemeGradientColorB = useSettingsStore((s) => s.setThemeGradientColorB);
@@ -651,14 +653,32 @@ const ThemeSection = React.memo(function ThemeSection() {
   const setThemeGlowOpacity = useSettingsStore((s) => s.setThemeGlowOpacity);
   const setBackgroundOpacity = useSettingsStore((s) => s.setBackgroundOpacity);
   const resetTheme = useSettingsStore((s) => s.resetTheme);
+  const currentArtworkUrl = usePlayerStore((s) => s.currentTrack?.artwork_url ?? null);
+  const artworkGradientPalette = useArtworkGradientPalette(
+    themeGradientFollowArtwork ? currentArtworkUrl : null,
+  );
+  const gradientFromArtworkActive =
+    themeGradientEnabled && themeGradientFollowArtwork && Boolean(artworkGradientPalette);
+  const effectiveAccentColor = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientB
+    : accentColor;
+  const effectiveThemeGradientColorA = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientA
+    : themeGradientColorA;
+  const effectiveThemeGradientColorB = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientB
+    : themeGradientColorB;
+  const effectiveThemeGradientColorC = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientC
+    : themeGradientColorC;
 
   const previewAccentGradient = themeGradientEnabled
     ? themeGradientType === 'radial'
-      ? `radial-gradient(circle at 24% 18%, ${themeGradientColorA} 0%, ${themeGradientColorB} 46%, ${themeGradientColorC} 100%)`
-      : `linear-gradient(${themeGradientAngle}deg, ${themeGradientColorA} 0%, ${themeGradientColorB} 46%, ${themeGradientColorC} 100%)`
-    : `linear-gradient(135deg, ${accentColor} 0%, ${accentColor} 100%)`;
+      ? `radial-gradient(circle at 24% 18%, ${effectiveThemeGradientColorA} 0%, ${effectiveThemeGradientColorB} 46%, ${effectiveThemeGradientColorC} 100%)`
+      : `linear-gradient(${themeGradientAngle}deg, ${effectiveThemeGradientColorA} 0%, ${effectiveThemeGradientColorB} 46%, ${effectiveThemeGradientColorC} 100%)`
+    : `linear-gradient(135deg, ${effectiveAccentColor} 0%, ${effectiveAccentColor} 100%)`;
   const previewGlow = themeGlowEnabled
-    ? `0 0 ${Math.round(28 + themeGlowIntensity * 0.46)}px ${hexToRgba(accentColor, 0.1 + themeGlowOpacity / 100 * 0.22)}`
+    ? `0 0 ${Math.round(28 + themeGlowIntensity * 0.46)}px ${hexToRgba(effectiveAccentColor, 0.1 + (themeGlowOpacity / 100) * 0.22)}`
     : undefined;
 
   return (
@@ -856,7 +876,34 @@ const ThemeSection = React.memo(function ThemeSection() {
               </div>
             </div>
 
-            <div className="grid gap-5 xl:grid-cols-3">
+            <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-white/[0.05] bg-black/10 px-4 py-3">
+              <div>
+                <div className="text-[13px] font-semibold text-white/80">
+                  {t('settings.themeGradientFollowArtwork')}
+                </div>
+                <div className="mt-1 text-[11px] text-white/40">
+                  {t('settings.themeGradientFollowArtworkDesc')}
+                </div>
+              </div>
+              <ThemeOptionChip
+                active={themeGradientFollowArtwork}
+                onClick={() => setThemeGradientFollowArtwork(!themeGradientFollowArtwork)}
+              >
+                {themeGradientFollowArtwork ? t('eq.on') : t('eq.off')}
+              </ThemeOptionChip>
+            </div>
+
+            {themeGradientFollowArtwork && (
+              <div className="text-[11px] text-white/32">
+                {t('settings.themeGradientFollowArtworkHint')}
+              </div>
+            )}
+
+            <div
+              className={`grid gap-5 xl:grid-cols-3 transition-opacity ${
+                themeGradientFollowArtwork ? 'opacity-55' : ''
+              }`}
+            >
               <ThemeColorField
                 label={t('settings.themeGradientColorA')}
                 value={themeGradientColorA}
@@ -959,9 +1006,7 @@ const ThemeSection = React.memo(function ThemeSection() {
                 <div className="text-[14px] font-semibold text-white/85">
                   {t('settings.themeGlow')}
                 </div>
-                <div className="text-[12px] text-white/45 mt-1">
-                  {t('settings.themeGlowDesc')}
-                </div>
+                <div className="text-[12px] text-white/45 mt-1">{t('settings.themeGlowDesc')}</div>
               </div>
               <ThemeOptionChip
                 active={themeGlowEnabled}
@@ -1006,9 +1051,7 @@ const ThemeSection = React.memo(function ThemeSection() {
                 <label className="text-[13px] text-white/50 font-medium">
                   {t('settings.themeGlowOpacity')}
                 </label>
-                <span className="text-[12px] text-white/30 tabular-nums">
-                  {themeGlowOpacity}%
-                </span>
+                <span className="text-[12px] text-white/30 tabular-nums">{themeGlowOpacity}%</span>
               </div>
               <input
                 type="range"
@@ -1145,7 +1188,6 @@ const AudioDeviceSection = React.memo(function AudioDeviceSection() {
       </div>
     </section>
   );
-
 });
 
 /* ── SoundWave Section ────────────────────────────────── */
@@ -1161,7 +1203,7 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
   const llmRerankEnabled = useSettingsStore((s) => s.llmRerankEnabled);
   const llmEndpoint = useSettingsStore((s) => s.llmEndpoint);
   const llmModel = useSettingsStore((s) => s.llmModel);
-  
+
   const setQdrantEnabled = useSettingsStore((s) => s.setQdrantEnabled);
   const setQdrantUrl = useSettingsStore((s) => s.setQdrantUrl);
   const setQdrantKey = useSettingsStore((s) => s.setQdrantKey);
@@ -1182,15 +1224,31 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
         className="w-full flex items-center justify-between px-6 py-5 hover:bg-white/[0.02] transition-colors cursor-pointer"
       >
         <div className="flex items-center gap-3">
-           <h3 className="text-[15px] font-bold text-white/80 tracking-tight">SoundWave (Pro)</h3>
-           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent/20 text-accent uppercase tracking-widest">Qdrant</span>
+          <h3 className="text-[15px] font-bold text-white/80 tracking-tight">SoundWave (Pro)</h3>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent/20 text-accent uppercase tracking-widest">
+            Qdrant
+          </span>
         </div>
         <div className="flex items-center gap-3">
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${qdrantEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}>
+          <span
+            className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${qdrantEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}
+          >
             {qdrantEnabled ? t('eq.on', 'On') : t('eq.off', 'Off')}
           </span>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className={`text-white/30 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}>
-            <path d="M3 5l4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
+            className={`text-white/30 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+          >
+            <path
+              d="M3 5l4 4 4-4"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </div>
       </button>
@@ -1199,8 +1257,15 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
         <div className="px-6 pb-6 space-y-5 border-t border-white/[0.05] pt-4 animate-fade-in-up">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <p className="text-[13px] text-white/70 font-medium">{t('settings.qdrantEnabled', 'Enable Recommendation Engine')}</p>
-              <p className="text-[11px] text-white/30">{t('settings.qdrantEnabledDesc', 'Use Qdrant for 96D vector search, spectral analysis and mood adaptation')}</p>
+              <p className="text-[13px] text-white/70 font-medium">
+                {t('settings.qdrantEnabled', 'Enable Recommendation Engine')}
+              </p>
+              <p className="text-[11px] text-white/30">
+                {t(
+                  'settings.qdrantEnabledDesc',
+                  'Use Qdrant for 96D vector search, spectral analysis and mood adaptation',
+                )}
+              </p>
             </div>
             <button
               onClick={() => setQdrantEnabled(!qdrantEnabled)}
@@ -1216,7 +1281,9 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
             </button>
           </div>
 
-          <div className={`space-y-4 transition-opacity duration-300 ${!qdrantEnabled ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+          <div
+            className={`space-y-4 transition-opacity duration-300 ${!qdrantEnabled ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}
+          >
             <div className="space-y-1.5">
               <label className="text-[12px] text-white/40 font-medium ml-1">
                 {t('settings.qdrantUrlLabel', 'Qdrant URL')}
@@ -1278,7 +1345,10 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
                     {t('settings.regionalTrendSeed', 'Cross-platform regional trend seeding')}
                   </p>
                   <p className="text-[11px] text-white/30">
-                    {t('settings.regionalTrendSeedDesc', 'Parse Apple/Deezer charts by regions and blend into discovery pool')}
+                    {t(
+                      'settings.regionalTrendSeedDesc',
+                      'Parse Apple/Deezer charts by regions and blend into discovery pool',
+                    )}
                   </p>
                 </div>
                 <button
@@ -1316,7 +1386,10 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
                     {t('settings.llmRerankEnabled', 'Enable LLM reranking')}
                   </p>
                   <p className="text-[11px] text-white/30">
-                    {t('settings.llmRerankEnabledDesc', 'Rerank recommendation candidates with a local LLM for better mood fit and diversity')}
+                    {t(
+                      'settings.llmRerankEnabledDesc',
+                      'Rerank recommendation candidates with a local LLM for better mood fit and diversity',
+                    )}
                   </p>
                 </div>
                 <button
@@ -1333,7 +1406,9 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
                 </button>
               </div>
 
-              <div className={`space-y-4 transition-opacity duration-300 ${!llmRerankEnabled ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+              <div
+                className={`space-y-4 transition-opacity duration-300 ${!llmRerankEnabled ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}
+              >
                 <div className="space-y-1.5">
                   <label className="text-[12px] text-white/40 font-medium ml-1">LLM Endpoint</label>
                   <input
@@ -1357,9 +1432,12 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
                 </div>
               </div>
             </div>
-            
+
             <p className="text-[11px] text-white/20 italic leading-relaxed">
-               {t('settings.qdrantNote', 'Note: You can use either Qdrant Cloud or a local Qdrant server. Tracks are vectorized locally, enriched with spectral features, and synced to the selected collection.')}
+              {t(
+                'settings.qdrantNote',
+                'Note: You can use either Qdrant Cloud or a local Qdrant server. Tracks are vectorized locally, enriched with spectral features, and synced to the selected collection.',
+              )}
             </p>
           </div>
         </div>
@@ -1397,7 +1475,9 @@ const PlaybackSection = React.memo(function PlaybackSection() {
   const setShowFpsCounter = useSettingsStore((s) => s.setShowFpsCounter);
   const setHardwareAcceleration = useSettingsStore((s) => s.setHardwareAcceleration);
   const setLowPerformanceMode = useSettingsStore((s) => s.setLowPerformanceMode);
-  const setExperimentalRuAudioTextWarmup = useSettingsStore((s) => s.setExperimentalRuAudioTextWarmup);
+  const setExperimentalRuAudioTextWarmup = useSettingsStore(
+    (s) => s.setExperimentalRuAudioTextWarmup,
+  );
   const crossfadeEnabled = useSettingsStore((s) => s.crossfadeEnabled);
   const crossfadeDuration = useSettingsStore((s) => s.crossfadeDuration);
   const setCrossfadeEnabled = useSettingsStore((s) => s.setCrossfadeEnabled);
@@ -1456,8 +1536,12 @@ const PlaybackSection = React.memo(function PlaybackSection() {
 
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-[13px] text-white/70 font-medium">{t('settings.normalizeVolume', 'Normalize Volume')}</p>
-          <p className="text-[11px] text-white/30 mt-0.5">{t('settings.normalizeVolumeDesc', 'Level loudness between tracks')}</p>
+          <p className="text-[13px] text-white/70 font-medium">
+            {t('settings.normalizeVolume', 'Normalize Volume')}
+          </p>
+          <p className="text-[11px] text-white/30 mt-0.5">
+            {t('settings.normalizeVolumeDesc', 'Level loudness between tracks')}
+          </p>
         </div>
         <button
           onClick={() => setNormalizeVolume(!normalizeVolume)}
@@ -1477,8 +1561,12 @@ const PlaybackSection = React.memo(function PlaybackSection() {
 
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-[13px] text-white/70 font-medium">{t('settings.highQualityStreaming')}</p>
-          <p className="text-[11px] text-white/30 mt-0.5">{t('settings.highQualityStreamingDesc')}</p>
+          <p className="text-[13px] text-white/70 font-medium">
+            {t('settings.highQualityStreaming')}
+          </p>
+          <p className="text-[11px] text-white/30 mt-0.5">
+            {t('settings.highQualityStreamingDesc')}
+          </p>
         </div>
         <button
           onClick={() => setHighQualityStreaming(!highQualityStreaming)}
@@ -1517,7 +1605,9 @@ const PlaybackSection = React.memo(function PlaybackSection() {
           </button>
         </div>
 
-        <div className={`transition-opacity duration-300 space-y-3 ${crossfadeEnabled ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
+        <div
+          className={`transition-opacity duration-300 space-y-3 ${crossfadeEnabled ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}
+        >
           <div className="flex items-center justify-between">
             <label className="text-[13px] text-white/60">{t('settings.crossfadeDuration')}</label>
             <span className="text-[12px] text-white/40 tabular-nums">{crossfadeDuration}s</span>
@@ -1570,8 +1660,12 @@ const PlaybackSection = React.memo(function PlaybackSection() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[13px] text-white/70 font-medium">{t('settings.discordRpc', 'Discord Rich Presence')}</p>
-            <p className="text-[11px] text-white/30 mt-0.5">{t('settings.discordRpcDesc', 'Show what you are listening to in Discord')}</p>
+            <p className="text-[13px] text-white/70 font-medium">
+              {t('settings.discordRpc', 'Discord Rich Presence')}
+            </p>
+            <p className="text-[11px] text-white/30 mt-0.5">
+              {t('settings.discordRpcDesc', 'Show what you are listening to in Discord')}
+            </p>
           </div>
           <button
             onClick={() => setDiscordRpc(!discordRpc)}
@@ -1590,7 +1684,9 @@ const PlaybackSection = React.memo(function PlaybackSection() {
         {discordRpc && (
           <>
             <div className="space-y-2">
-              <p className="text-[13px] text-white/50 font-medium">{t('settings.discordRpcMode', 'Display Mode')}</p>
+              <p className="text-[13px] text-white/50 font-medium">
+                {t('settings.discordRpcMode', 'Display Mode')}
+              </p>
               <div className="grid grid-cols-2 gap-2">
                 {DISCORD_RPC_MODES.map((mode) => {
                   const active = discordRpcMode === mode.id;
@@ -1670,9 +1766,7 @@ const PlaybackSection = React.memo(function PlaybackSection() {
           <p className="text-[13px] text-white/70 font-medium">
             {t('settings.lowPerformanceMode')}
           </p>
-          <p className="text-[11px] text-white/30">
-            {t('settings.lowPerformanceModeDesc')}
-          </p>
+          <p className="text-[11px] text-white/30">{t('settings.lowPerformanceModeDesc')}</p>
         </div>
         <button
           type="button"
@@ -1720,7 +1814,7 @@ const PlaybackSection = React.memo(function PlaybackSection() {
             }`}
           />
         </div>
-        
+
         <div className="flex items-center gap-2 pt-6">
           <label className="text-[12px] text-white/50 cursor-pointer flex items-center gap-2">
             <input
@@ -1860,8 +1954,6 @@ const AccountSection = React.memo(function AccountSection() {
   );
 });
 
-
-
 /* ── Visualizer Section ──────────────────────────────────── */
 
 const VisualizerSection = React.memo(function VisualizerSection() {
@@ -1869,18 +1961,18 @@ const VisualizerSection = React.memo(function VisualizerSection() {
   const [open, setOpen] = useState(false);
 
   // All hooks must be called unconditionally (Rules of Hooks)
-  const style        = useSettingsStore((s) => s.visualizerStyle);
-  const playbar      = useSettingsStore((s) => s.visualizerPlaybar);
-  const fullscreen   = useSettingsStore((s) => s.visualizerFullscreen);
-  const themeColor   = useSettingsStore((s) => s.visualizerThemeColor);
-  const mirror       = useSettingsStore((s) => s.visualizerMirror);
-  const height       = useSettingsStore((s) => s.visualizerHeight);
-  const scale        = useSettingsStore((s) => s.visualizerScale);
-  const opacity      = useSettingsStore((s) => s.visualizerOpacity);
-  const smoothing    = useSettingsStore((s) => s.visualizerSmoothing);
-  const fade         = useSettingsStore((s) => s.visualizerFade);
-  const bars         = useSettingsStore((s) => s.visualizerBars);
-  const yOffset      = useSettingsStore((s) => s.visualizerYOffset);
+  const style = useSettingsStore((s) => s.visualizerStyle);
+  const playbar = useSettingsStore((s) => s.visualizerPlaybar);
+  const fullscreen = useSettingsStore((s) => s.visualizerFullscreen);
+  const themeColor = useSettingsStore((s) => s.visualizerThemeColor);
+  const mirror = useSettingsStore((s) => s.visualizerMirror);
+  const height = useSettingsStore((s) => s.visualizerHeight);
+  const scale = useSettingsStore((s) => s.visualizerScale);
+  const opacity = useSettingsStore((s) => s.visualizerOpacity);
+  const smoothing = useSettingsStore((s) => s.visualizerSmoothing);
+  const fade = useSettingsStore((s) => s.visualizerFade);
+  const bars = useSettingsStore((s) => s.visualizerBars);
+  const yOffset = useSettingsStore((s) => s.visualizerYOffset);
   const isOff = style === 'Off';
 
   return (
@@ -1890,13 +1982,29 @@ const VisualizerSection = React.memo(function VisualizerSection() {
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-6 py-5 hover:bg-white/[0.02] transition-colors cursor-pointer"
       >
-        <h3 className="text-[15px] font-bold text-white/80 tracking-tight">{t('visualizer.title', 'Audio Visualizer')}</h3>
+        <h3 className="text-[15px] font-bold text-white/80 tracking-tight">
+          {t('visualizer.title', 'Audio Visualizer')}
+        </h3>
         <div className="flex items-center gap-3">
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${!isOff ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}>
+          <span
+            className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${!isOff ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}
+          >
             {!isOff ? t('eq.on', 'On') : t('eq.off', 'Off')}
           </span>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className={`text-white/30 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}>
-            <path d="M3 5l4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
+            className={`text-white/30 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+          >
+            <path
+              d="M3 5l4 4 4-4"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </div>
       </button>
@@ -1906,10 +2014,14 @@ const VisualizerSection = React.memo(function VisualizerSection() {
           <div className="flex gap-2 bg-white/[0.04] p-1 rounded-xl">
             {['Off', 'Bars', 'Wave', 'Pulse'].map((s) => {
               const isActive = style === s;
-              const label = s === 'Off' ? t('visualizer.off', 'Off') 
-                         : s === 'Bars' ? t('visualizer.bars', 'Bars') 
-                         : s === 'Wave' ? t('visualizer.wave', 'Wave') 
-                         : t('visualizer.pulse', 'Pulse');
+              const label =
+                s === 'Off'
+                  ? t('visualizer.off', 'Off')
+                  : s === 'Bars'
+                    ? t('visualizer.bars', 'Bars')
+                    : s === 'Wave'
+                      ? t('visualizer.wave', 'Wave')
+                      : t('visualizer.pulse', 'Pulse');
               return (
                 <button
                   key={s}
@@ -1923,73 +2035,189 @@ const VisualizerSection = React.memo(function VisualizerSection() {
               );
             })}
           </div>
-          
-          <div className={`space-y-4 transition-opacity duration-300 ${isOff ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+
+          <div
+            className={`space-y-4 transition-opacity duration-300 ${isOff ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}
+          >
             <div className="flex items-center justify-between">
-              <span className="text-[13px] text-white/60">{t('visualizer.showAbovePlaybar', 'Show above playbar')}</span>
-              <input type="checkbox" checked={playbar} onChange={(e) => useSettingsStore.getState().setVisualizerPlaybar(e.target.checked)} className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer" />
+              <span className="text-[13px] text-white/60">
+                {t('visualizer.showAbovePlaybar', 'Show above playbar')}
+              </span>
+              <input
+                type="checkbox"
+                checked={playbar}
+                onChange={(e) => useSettingsStore.getState().setVisualizerPlaybar(e.target.checked)}
+                className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+              />
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[13px] text-white/60">{t('visualizer.showInFullscreen', 'Show in Fullscreen')}</span>
-              <input type="checkbox" checked={fullscreen} onChange={(e) => useSettingsStore.getState().setVisualizerFullscreen(e.target.checked)} className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer" />
+              <span className="text-[13px] text-white/60">
+                {t('visualizer.showInFullscreen', 'Show in Fullscreen')}
+              </span>
+              <input
+                type="checkbox"
+                checked={fullscreen}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerFullscreen(e.target.checked)
+                }
+                className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+              />
             </div>
             <div className="flex items-center justify-between pt-1">
-              <span className="text-[13px] text-white/60">{t('visualizer.useThemeColor', 'Use Theme Color')}</span>
-              <input type="checkbox" checked={themeColor} onChange={(e) => useSettingsStore.getState().setVisualizerThemeColor(e.target.checked)} className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer" />
+              <span className="text-[13px] text-white/60">
+                {t('visualizer.useThemeColor', 'Use Theme Color')}
+              </span>
+              <input
+                type="checkbox"
+                checked={themeColor}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerThemeColor(e.target.checked)
+                }
+                className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+              />
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[13px] text-white/60">{t('visualizer.mirror', 'Mirror (flip horizontally)')}</span>
-              <input type="checkbox" checked={mirror} onChange={(e) => useSettingsStore.getState().setVisualizerMirror(e.target.checked)} className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer" />
+              <span className="text-[13px] text-white/60">
+                {t('visualizer.mirror', 'Mirror (flip horizontally)')}
+              </span>
+              <input
+                type="checkbox"
+                checked={mirror}
+                onChange={(e) => useSettingsStore.getState().setVisualizerMirror(e.target.checked)}
+                className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+              />
             </div>
 
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[13px] text-white/60">{t('visualizer.height', 'Height')}</label>
+                <label className="text-[13px] text-white/60">
+                  {t('visualizer.height', 'Height')}
+                </label>
                 <span className="text-[12px] text-white/40 tabular-nums">{height}px</span>
               </div>
-              <input type="range" min={32} max={300} step={8} value={height} onChange={(e) => useSettingsStore.getState().setVisualizerHeight(Number(e.target.value))} className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]" />
+              <input
+                type="range"
+                min={32}
+                max={300}
+                step={8}
+                value={height}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerHeight(Number(e.target.value))
+                }
+                className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]"
+              />
             </div>
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[13px] text-white/60">{t('visualizer.scale', 'Scale')}</label>
+                <label className="text-[13px] text-white/60">
+                  {t('visualizer.scale', 'Scale')}
+                </label>
                 <span className="text-[12px] text-white/40 tabular-nums">{scale}%</span>
               </div>
-              <input type="range" min={50} max={200} step={10} value={scale} onChange={(e) => useSettingsStore.getState().setVisualizerScale(Number(e.target.value))} className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]" />
+              <input
+                type="range"
+                min={50}
+                max={200}
+                step={10}
+                value={scale}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerScale(Number(e.target.value))
+                }
+                className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]"
+              />
             </div>
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[13px] text-white/60">{t('visualizer.opacity', 'Opacity')}</label>
+                <label className="text-[13px] text-white/60">
+                  {t('visualizer.opacity', 'Opacity')}
+                </label>
                 <span className="text-[12px] text-white/40 tabular-nums">{opacity}%</span>
               </div>
-              <input type="range" min={10} max={100} step={5} value={opacity} onChange={(e) => useSettingsStore.getState().setVisualizerOpacity(Number(e.target.value))} className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]" />
+              <input
+                type="range"
+                min={10}
+                max={100}
+                step={5}
+                value={opacity}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerOpacity(Number(e.target.value))
+                }
+                className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]"
+              />
             </div>
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[13px] text-white/60">{t('visualizer.smoothing', 'Smoothing')}</label>
+                <label className="text-[13px] text-white/60">
+                  {t('visualizer.smoothing', 'Smoothing')}
+                </label>
                 <span className="text-[12px] text-white/40 tabular-nums">{smoothing}%</span>
               </div>
-              <input type="range" min={5} max={80} step={5} value={smoothing} onChange={(e) => useSettingsStore.getState().setVisualizerSmoothing(Number(e.target.value))} className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]" />
+              <input
+                type="range"
+                min={5}
+                max={80}
+                step={5}
+                value={smoothing}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerSmoothing(Number(e.target.value))
+                }
+                className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]"
+              />
             </div>
             <div className="space-y-1">
               <div className="flex items-center justify-between">
                 <label className="text-[13px] text-white/60">{t('visualizer.fade', 'Fade')}</label>
                 <span className="text-[12px] text-white/40 tabular-nums">{fade}%</span>
               </div>
-              <input type="range" min={0} max={100} step={5} value={fade} onChange={(e) => useSettingsStore.getState().setVisualizerFade(Number(e.target.value))} className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]" />
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={fade}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerFade(Number(e.target.value))
+                }
+                className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]"
+              />
             </div>
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[13px] text-white/60">{t('visualizer.barCount', 'Bar Count')}</label>
+                <label className="text-[13px] text-white/60">
+                  {t('visualizer.barCount', 'Bar Count')}
+                </label>
                 <span className="text-[12px] text-white/40 tabular-nums">{bars}</span>
               </div>
-              <input type="range" min={8} max={128} step={4} value={bars} onChange={(e) => useSettingsStore.getState().setVisualizerBars(Number(e.target.value))} className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]" />
+              <input
+                type="range"
+                min={8}
+                max={128}
+                step={4}
+                value={bars}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerBars(Number(e.target.value))
+                }
+                className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]"
+              />
             </div>
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[13px] text-white/60">{t('visualizer.yOffset', 'Y-Offset')}</label>
+                <label className="text-[13px] text-white/60">
+                  {t('visualizer.yOffset', 'Y-Offset')}
+                </label>
                 <span className="text-[12px] text-white/40 tabular-nums">{yOffset}px</span>
               </div>
-              <input type="range" min={-300} max={300} step={10} value={yOffset} onChange={(e) => useSettingsStore.getState().setVisualizerYOffset(Number(e.target.value))} className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]" />
+              <input
+                type="range"
+                min={-300}
+                max={300}
+                step={10}
+                value={yOffset}
+                onChange={(e) =>
+                  useSettingsStore.getState().setVisualizerYOffset(Number(e.target.value))
+                }
+                className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)]"
+              />
             </div>
           </div>
         </div>
@@ -2000,7 +2228,18 @@ const VisualizerSection = React.memo(function VisualizerSection() {
 
 /* ── Equalizer Section ───────────────────────────────────── */
 
-const EQ_BANDS_LABELS = ['30Hz', '60Hz', '125Hz', '250Hz', '500Hz', '1kHz', '2kHz', '4kHz', '8kHz', '14kHz'];
+const EQ_BANDS_LABELS = [
+  '30Hz',
+  '60Hz',
+  '125Hz',
+  '250Hz',
+  '500Hz',
+  '1kHz',
+  '2kHz',
+  '4kHz',
+  '8kHz',
+  '14kHz',
+];
 
 const EqualizerSection = React.memo(function EqualizerSection() {
   const { t } = useTranslation();
@@ -2019,18 +2258,31 @@ const EqualizerSection = React.memo(function EqualizerSection() {
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-6 py-5 hover:bg-white/[0.02] transition-colors cursor-pointer"
       >
-        <h3 className="text-[15px] font-bold text-white/80 tracking-tight">{t('eq.title', 'Equalizer')}</h3>
+        <h3 className="text-[15px] font-bold text-white/80 tracking-tight">
+          {t('eq.title', 'Equalizer')}
+        </h3>
         <div className="flex items-center gap-3">
           {/* EQ enabled badge */}
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${eqEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}>
+          <span
+            className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${eqEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}
+          >
             {eqEnabled ? t('eq.on', 'On') : t('eq.off', 'Off')}
           </span>
           {/* Chevron */}
           <svg
-            width="14" height="14" viewBox="0 0 14 14" fill="none"
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
             className={`text-white/30 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
           >
-            <path d="M3 5l4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            <path
+              d="M3 5l4 4 4-4"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </div>
       </button>
@@ -2040,7 +2292,9 @@ const EqualizerSection = React.memo(function EqualizerSection() {
         <div className="px-6 pb-6 space-y-4 border-t border-white/[0.05] pt-4 animate-fade-in-up">
           {/* Enable toggle */}
           <div className="flex items-center justify-between">
-            <span className="text-[13px] text-white/60">{t('eq.enableEqualizer', 'Enable Equalizer')}</span>
+            <span className="text-[13px] text-white/60">
+              {t('eq.enableEqualizer', 'Enable Equalizer')}
+            </span>
             <button
               type="button"
               onClick={() => setEqEnabled(!eqEnabled)}
@@ -2056,11 +2310,18 @@ const EqualizerSection = React.memo(function EqualizerSection() {
             </button>
           </div>
 
-          <div className={`transition-opacity duration-300 ${eqEnabled ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
+          <div
+            className={`transition-opacity duration-300 ${eqEnabled ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}
+          >
             <div className="flex items-end justify-between h-48 pt-2 pb-2 gap-1 overflow-x-auto relative">
               {eqGains.map((gain, i) => (
-                <div key={i} className="flex flex-col items-center justify-end h-full gap-3 flex-1 min-w-[28px]">
-                  <span className="text-[10px] text-white/40 font-medium tabular-nums">{gain > 0 ? `+${gain.toFixed(1)}` : gain.toFixed(1)}</span>
+                <div
+                  key={i}
+                  className="flex flex-col items-center justify-end h-full gap-3 flex-1 min-w-[28px]"
+                >
+                  <span className="text-[10px] text-white/40 font-medium tabular-nums">
+                    {gain > 0 ? `+${gain.toFixed(1)}` : gain.toFixed(1)}
+                  </span>
                   <input
                     type="range"
                     min={-12}
@@ -2071,14 +2332,16 @@ const EqualizerSection = React.memo(function EqualizerSection() {
                     className="w-1.5 h-28 accent-[var(--color-accent)] bg-white/10 rounded-full cursor-pointer hover:bg-white/20 transition-colors"
                     style={{ WebkitAppearance: 'slider-vertical' }}
                   />
-                  <span className="text-[10px] text-white/50 font-semibold">{EQ_BANDS_LABELS[i]}</span>
+                  <span className="text-[10px] text-white/50 font-semibold">
+                    {EQ_BANDS_LABELS[i]}
+                  </span>
                 </div>
               ))}
             </div>
 
             <div className="flex justify-end pt-4 border-t border-white/[0.05] mt-2">
               <button
-                onClick={() => setEqGains([0,0,0,0,0,0,0,0,0,0])}
+                onClick={() => setEqGains([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])}
                 className="text-[12px] font-medium text-white/40 hover:text-white/80 transition-colors cursor-pointer"
               >
                 {t('eq.resetToFlat', 'Reset to Flat')}
@@ -2106,7 +2369,9 @@ const ApiSection = React.memo(function ApiSection() {
   return (
     <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl space-y-4">
       <div>
-        <h3 className="text-[15px] font-bold text-white/80 tracking-tight">{t('settings.apiServer')}</h3>
+        <h3 className="text-[15px] font-bold text-white/80 tracking-tight">
+          {t('settings.apiServer')}
+        </h3>
         <p className="mt-1 text-[12px] text-white/35">{t('settings.apiServerDesc')}</p>
       </div>
 

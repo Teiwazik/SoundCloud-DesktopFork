@@ -3,7 +3,8 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { tauriStorage } from '../lib/tauri-storage';
 
-const ENCODED_QDRANT_URL = 'aHR0cHM6Ly9hZDkzOTEzOS00ODE5LTRkM2EtYjJhMS0xMTQ3YTAzZjU5YWMuc2EtZWFzdC0xLTAuYXdzLmNsb3VkLnFkcmFudC5pby8=';
+const ENCODED_QDRANT_URL =
+  'aHR0cHM6Ly9hZDkzOTEzOS00ODE5LTRkM2EtYjJhMS0xMTQ3YTAzZjU5YWMuc2EtZWFzdC0xLTAuYXdzLmNsb3VkLnFkcmFudC5pby8=';
 const ENCODED_QDRANT_KEY =
   'ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SmhZMk5sYzNNaU9pSnRJbjAuZ3ZTVlZEbFNEMms1OWxDb2ktSms2bFQtUUVPXzRYbXBVQmJ6eDNEdDRTOA==';
 const ENCODED_QDRANT_COLLECTION = 'c3dfMTI=';
@@ -45,7 +46,25 @@ const PREDEFINED_QDRANT_URL = decodeBase64(ENCODED_QDRANT_URL);
 const PREDEFINED_QDRANT_KEY = decodeBase64(ENCODED_QDRANT_KEY);
 const PREDEFINED_QDRANT_COLLECTION = decodeBase64(ENCODED_QDRANT_COLLECTION);
 
-const normalizeQdrantUrl = (value: string): string => value.trim().replace('aws.courd.qdrant.io', 'aws.cloud.qdrant.io');
+const normalizeQdrantUrl = (value: string): string =>
+  value.trim().replace('aws.courd.qdrant.io', 'aws.cloud.qdrant.io');
+const normalizePreferredLanguages = (value: unknown): string[] => {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === 'string' && value.trim() && value !== 'all'
+      ? [value]
+      : [];
+
+  const deduped = new Set<string>();
+  for (const entry of source) {
+    if (typeof entry !== 'string') continue;
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized || normalized === 'all' || deduped.has(normalized)) continue;
+    deduped.add(normalized);
+  }
+
+  return Array.from(deduped);
+};
 
 export type ThemePreset = 'soundcloud' | 'dark' | 'neon' | 'forest' | 'crimson' | 'custom';
 export type ThemeGradientType = 'linear' | 'radial';
@@ -100,6 +119,7 @@ export interface SettingsState {
   bgPrimary: string;
   themePreset: ThemePreset;
   themeGradientEnabled: boolean;
+  themeGradientFollowArtwork: boolean;
   themeGradientType: ThemeGradientType;
   themeGradientColorA: string;
   themeGradientColorB: string;
@@ -167,7 +187,7 @@ export interface SettingsState {
   experimentalRuAudioTextWarmup: boolean;
   soundwavePresetKey: string;
   languageFilterEnabled: boolean;
-  preferredLanguage: string;
+  preferredLanguages: string[];
   soundwaveGenreStrict: boolean;
   soundwaveSelectedGenres: string[];
   soundwaveHideLiked: boolean;
@@ -175,6 +195,7 @@ export interface SettingsState {
   setBgPrimary: (bg: string) => void;
   setThemePreset: (id: ThemePreset) => void;
   setThemeGradientEnabled: (enabled: boolean) => void;
+  setThemeGradientFollowArtwork: (enabled: boolean) => void;
   setThemeGradientType: (type: ThemeGradientType) => void;
   setThemeGradientColorA: (color: string) => void;
   setThemeGradientColorB: (color: string) => void;
@@ -243,6 +264,8 @@ export interface SettingsState {
   setExperimentalRuAudioTextWarmup: (v: boolean) => void;
   setSoundwavePresetKey: (key: string) => void;
   setLanguageFilterEnabled: (v: boolean) => void;
+  setPreferredLanguages: (langs: string[]) => void;
+  togglePreferredLanguage: (lang: string) => void;
   setPreferredLanguage: (lang: string) => void;
   setSoundwaveGenreStrict: (v: boolean) => void;
   setSoundwaveSelectedGenres: (genres: string[]) => void;
@@ -252,9 +275,12 @@ export interface SettingsState {
 
 const DEFAULT_EQ_GAINS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
-const ENV_QDRANT_URL = normalizeQdrantUrl(import.meta.env.VITE_QDRANT_URL?.trim() || PREDEFINED_QDRANT_URL);
+const ENV_QDRANT_URL = normalizeQdrantUrl(
+  import.meta.env.VITE_QDRANT_URL?.trim() || PREDEFINED_QDRANT_URL,
+);
 const ENV_QDRANT_KEY = import.meta.env.VITE_QDRANT_API_KEY?.trim() || PREDEFINED_QDRANT_KEY;
-const ENV_QDRANT_COLLECTION = import.meta.env.VITE_QDRANT_COLLECTION?.trim() || PREDEFINED_QDRANT_COLLECTION;
+const ENV_QDRANT_COLLECTION =
+  import.meta.env.VITE_QDRANT_COLLECTION?.trim() || PREDEFINED_QDRANT_COLLECTION;
 const ENV_QDRANT_ENABLED_RAW = import.meta.env.VITE_QDRANT_ENABLED;
 const ENV_QDRANT_ENABLED = ENV_QDRANT_ENABLED_RAW
   ? ['1', 'true', 'yes', 'on'].includes(ENV_QDRANT_ENABLED_RAW.toLowerCase())
@@ -279,6 +305,7 @@ const DEFAULTS = {
   bgPrimary: '#08080a',
   themePreset: 'soundcloud' as ThemePreset,
   themeGradientEnabled: true,
+  themeGradientFollowArtwork: false,
   themeGradientType: 'linear' as ThemeGradientType,
   themeGradientColorA: '#0b1220',
   themeGradientColorB: '#1a1b3a',
@@ -346,7 +373,7 @@ const DEFAULTS = {
   experimentalRuAudioTextWarmup: false,
   soundwavePresetKey: 'work',
   languageFilterEnabled: false,
-  preferredLanguage: 'all',
+  preferredLanguages: [],
   soundwaveGenreStrict: true,
   soundwaveSelectedGenres: [],
   soundwaveHideLiked: false,
@@ -366,18 +393,29 @@ export const useSettingsStore = create<SettingsState>()(
           set({ themePreset: id, accentColor: preset.accent, bgPrimary: preset.bg });
         }
       },
-      setThemeGradientEnabled: (themeGradientEnabled) => set({ themeGradientEnabled, themePreset: 'custom' }),
-      setThemeGradientType: (themeGradientType) => set({ themeGradientType, themePreset: 'custom' }),
-      setThemeGradientColorA: (themeGradientColorA) => set({ themeGradientColorA, themePreset: 'custom' }),
-      setThemeGradientColorB: (themeGradientColorB) => set({ themeGradientColorB, themePreset: 'custom' }),
-      setThemeGradientColorC: (themeGradientColorC) => set({ themeGradientColorC, themePreset: 'custom' }),
-      setThemeGradientAngle: (themeGradientAngle) => set({ themeGradientAngle, themePreset: 'custom' }),
-      setThemeGradientAnimated: (themeGradientAnimated) => set({ themeGradientAnimated, themePreset: 'custom' }),
+      setThemeGradientEnabled: (themeGradientEnabled) =>
+        set({ themeGradientEnabled, themePreset: 'custom' }),
+      setThemeGradientFollowArtwork: (themeGradientFollowArtwork) =>
+        set({ themeGradientFollowArtwork, themePreset: 'custom' }),
+      setThemeGradientType: (themeGradientType) =>
+        set({ themeGradientType, themePreset: 'custom' }),
+      setThemeGradientColorA: (themeGradientColorA) =>
+        set({ themeGradientColorA, themePreset: 'custom' }),
+      setThemeGradientColorB: (themeGradientColorB) =>
+        set({ themeGradientColorB, themePreset: 'custom' }),
+      setThemeGradientColorC: (themeGradientColorC) =>
+        set({ themeGradientColorC, themePreset: 'custom' }),
+      setThemeGradientAngle: (themeGradientAngle) =>
+        set({ themeGradientAngle, themePreset: 'custom' }),
+      setThemeGradientAnimated: (themeGradientAnimated) =>
+        set({ themeGradientAnimated, themePreset: 'custom' }),
       setThemeGradientAnimation: (themeGradientAnimation) =>
         set({ themeGradientAnimation, themePreset: 'custom' }),
-      setThemeGradientSpeed: (themeGradientSpeed) => set({ themeGradientSpeed, themePreset: 'custom' }),
+      setThemeGradientSpeed: (themeGradientSpeed) =>
+        set({ themeGradientSpeed, themePreset: 'custom' }),
       setThemeGlowEnabled: (themeGlowEnabled) => set({ themeGlowEnabled, themePreset: 'custom' }),
-      setThemeGlowIntensity: (themeGlowIntensity) => set({ themeGlowIntensity, themePreset: 'custom' }),
+      setThemeGlowIntensity: (themeGlowIntensity) =>
+        set({ themeGlowIntensity, themePreset: 'custom' }),
       setThemeGlowOpacity: (themeGlowOpacity) => set({ themeGlowOpacity, themePreset: 'custom' }),
       setBackgroundImage: (backgroundImage) => set({ backgroundImage }),
       setBackgroundOpacity: (backgroundOpacity) => set({ backgroundOpacity }),
@@ -460,16 +498,25 @@ export const useSettingsStore = create<SettingsState>()(
         }));
 
         if (lowPerformanceMode) {
-          invoke('save_framerate_config', { target: Math.min(get().targetFramerate, 30), unlocked: false }).catch(console.error);
+          invoke('save_framerate_config', {
+            target: Math.min(get().targetFramerate, 30),
+            unlocked: false,
+          }).catch(console.error);
         }
       },
       setTargetFramerate: (targetFramerate) => {
         set({ targetFramerate });
-        invoke('save_framerate_config', { target: targetFramerate, unlocked: get().unlockFramerate }).catch(console.error);
+        invoke('save_framerate_config', {
+          target: targetFramerate,
+          unlocked: get().unlockFramerate,
+        }).catch(console.error);
       },
       setUnlockFramerate: (unlockFramerate) => {
         set({ unlockFramerate });
-        invoke('save_framerate_config', { target: get().targetFramerate, unlocked: unlockFramerate }).catch(console.error);
+        invoke('save_framerate_config', {
+          target: get().targetFramerate,
+          unlocked: unlockFramerate,
+        }).catch(console.error);
       },
       setShowFpsCounter: (showFpsCounter) => set({ showFpsCounter }),
       setHardwareAcceleration: (hardwareAcceleration) => set({ hardwareAcceleration }),
@@ -478,7 +525,27 @@ export const useSettingsStore = create<SettingsState>()(
         set({ experimentalRuAudioTextWarmup }),
       setSoundwavePresetKey: (soundwavePresetKey) => set({ soundwavePresetKey }),
       setLanguageFilterEnabled: (languageFilterEnabled) => set({ languageFilterEnabled }),
-      setPreferredLanguage: (preferredLanguage) => set({ preferredLanguage }),
+      setPreferredLanguages: (preferredLanguages) =>
+        set({ preferredLanguages: normalizePreferredLanguages(preferredLanguages) }),
+      togglePreferredLanguage: (preferredLanguage) =>
+        set((state) => {
+          if (!preferredLanguage || preferredLanguage === 'all') {
+            return { preferredLanguages: [] };
+          }
+
+          const normalized = preferredLanguage.trim().toLowerCase();
+          const nextLanguages = state.preferredLanguages.includes(normalized)
+            ? state.preferredLanguages.filter((lang) => lang !== normalized)
+            : [...state.preferredLanguages, normalized];
+
+          return { preferredLanguages: nextLanguages };
+        }),
+      setPreferredLanguage: (preferredLanguage) =>
+        set({
+          preferredLanguages: normalizePreferredLanguages(
+            preferredLanguage === 'all' ? [] : preferredLanguage,
+          ),
+        }),
       setSoundwaveGenreStrict: (soundwaveGenreStrict) => set({ soundwaveGenreStrict }),
       setSoundwaveSelectedGenres: (soundwaveSelectedGenres) => set({ soundwaveSelectedGenres }),
       setSoundwaveHideLiked: (soundwaveHideLiked) => set({ soundwaveHideLiked }),
@@ -488,6 +555,7 @@ export const useSettingsStore = create<SettingsState>()(
           bgPrimary: DEFAULTS.bgPrimary,
           themePreset: DEFAULTS.themePreset,
           themeGradientEnabled: DEFAULTS.themeGradientEnabled,
+          themeGradientFollowArtwork: DEFAULTS.themeGradientFollowArtwork,
           themeGradientType: DEFAULTS.themeGradientType,
           themeGradientColorA: DEFAULTS.themeGradientColorA,
           themeGradientColorB: DEFAULTS.themeGradientColorB,
@@ -507,37 +575,65 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'sc-settings',
       storage: createJSONStorage(() => tauriStorage),
-      version: 13,
+      version: 14,
       migrate: (persistedState) => {
-        const state = (persistedState && typeof persistedState === 'object'
-          ? persistedState
-          : {}) as Partial<SettingsState>;
+        const state = (
+          persistedState && typeof persistedState === 'object' ? persistedState : {}
+        ) as Partial<SettingsState> & {
+          preferredLanguage?: unknown;
+          preferredLanguages?: unknown;
+        };
         const decodedKey = decodeQdrantKeyFromStorage((state.qdrantKey as string) || '');
         const normalizedKey = decodedKey.trim();
         const qdrantKey =
           normalizedKey && normalizedKey !== ENV_QDRANT_KEY ? normalizedKey : DEFAULTS.qdrantKey;
         const qdrantUrl = normalizeQdrantUrl((state.qdrantUrl as string) || DEFAULTS.qdrantUrl);
+        const preferredLanguages = normalizePreferredLanguages(
+          Array.isArray(state.preferredLanguages)
+            ? state.preferredLanguages
+            : state.preferredLanguage,
+        );
+        const {
+          preferredLanguage: _legacyPreferredLanguage,
+          preferredLanguages: _preferredLanguages,
+          ...restState
+        } = state;
         return {
           ...DEFAULTS,
-          ...state,
+          ...restState,
           qdrantUrl,
           qdrantKey,
+          preferredLanguages,
         };
       },
       merge: (persistedState, currentState) => {
-        const state = (persistedState && typeof persistedState === 'object'
-          ? persistedState
-          : {}) as Partial<SettingsState>;
+        const state = (
+          persistedState && typeof persistedState === 'object' ? persistedState : {}
+        ) as Partial<SettingsState> & {
+          preferredLanguage?: unknown;
+          preferredLanguages?: unknown;
+        };
         const decodedKey = decodeQdrantKeyFromStorage((state.qdrantKey as string) || '');
         const normalizedKey = decodedKey.trim();
         const qdrantKey =
           normalizedKey && normalizedKey !== ENV_QDRANT_KEY ? normalizedKey : DEFAULTS.qdrantKey;
         const qdrantUrl = normalizeQdrantUrl((state.qdrantUrl as string) || currentState.qdrantUrl);
+        const preferredLanguages = normalizePreferredLanguages(
+          Array.isArray(state.preferredLanguages)
+            ? state.preferredLanguages
+            : state.preferredLanguage,
+        );
+        const {
+          preferredLanguage: _legacyPreferredLanguage,
+          preferredLanguages: _preferredLanguages,
+          ...restState
+        } = state;
         return {
           ...currentState,
-          ...state,
+          ...restState,
           qdrantUrl,
           qdrantKey,
+          preferredLanguages,
         };
       },
       partialize: (s) => ({
@@ -545,6 +641,7 @@ export const useSettingsStore = create<SettingsState>()(
         bgPrimary: s.bgPrimary,
         themePreset: s.themePreset,
         themeGradientEnabled: s.themeGradientEnabled,
+        themeGradientFollowArtwork: s.themeGradientFollowArtwork,
         themeGradientType: s.themeGradientType,
         themeGradientColorA: s.themeGradientColorA,
         themeGradientColorB: s.themeGradientColorB,
@@ -613,7 +710,7 @@ export const useSettingsStore = create<SettingsState>()(
         visualizerBars: s.visualizerBars,
         lowPerformanceMode: s.lowPerformanceMode,
         languageFilterEnabled: s.languageFilterEnabled,
-        preferredLanguage: s.preferredLanguage,
+        preferredLanguages: s.preferredLanguages,
         soundwaveGenreStrict: s.soundwaveGenreStrict,
         soundwaveSelectedGenres: s.soundwaveSelectedGenres,
         soundwaveHideLiked: s.soundwaveHideLiked,

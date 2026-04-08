@@ -1,0 +1,72 @@
+name: Windows EXE Manual
+
+on:
+  push:
+    branches:
+      - "ci/windows-exe-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-exe-manual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          key: windows-exe-manual
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build portable executable
+        working-directory: desktop
+        run: pnpm tauri build --bundles none
+
+      - name: Prepare portable package
+        shell: bash
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          OUT_DIR="portable-win-x64"
+          ARTIFACT_DIR="artifacts"
+          mkdir -p "$OUT_DIR" "$ARTIFACT_DIR"
+
+          cp "src-tauri/target/release/soundcloud-desktop.exe" "$OUT_DIR/"
+          if [ -f "src-tauri/target/release/WebView2Loader.dll" ]; then
+            cp "src-tauri/target/release/WebView2Loader.dll" "$OUT_DIR/"
+          fi
+
+          powershell -NoLogo -NoProfile -Command "Compress-Archive -Path '$OUT_DIR/*' -DestinationPath '$ARTIFACT_DIR/soundcloud-desktop_${VERSION}_x64-portable.zip' -Force"
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe-portable
+          retention-days: 7
+          path: desktop/artifacts/soundcloud-desktop_*_x64-portable.zip

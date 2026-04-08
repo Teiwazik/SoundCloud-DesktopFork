@@ -136,7 +136,10 @@ pub async fn proxy_request(encoded: &str) -> ProxyResult {
     // Fallback: direct fetch from target URL when remote proxy is unstable.
     if status >= 500 {
         #[cfg(debug_assertions)]
-        println!("[Proxy] remote failed ({}), trying direct {}", status, target_url);
+        println!(
+            "[Proxy] remote failed ({}), trying direct {}",
+            status, target_url
+        );
 
         for attempt in 0..2u8 {
             if attempt > 0 {

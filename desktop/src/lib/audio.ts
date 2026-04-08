@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Track } from '../stores/player';
-import { usePlayerStore } from '../stores/player';
+import { clampPlaybackRate, getEffectivePitchSemitones, usePlayerStore } from '../stores/player';
 import { useSettingsStore } from '../stores/settings';
 import { useSoundWaveStore } from '../stores/soundwave';
 import { api, getSessionId, streamUrl } from './api';
@@ -51,14 +51,16 @@ export function getCurrentTime(): number {
 }
 
 export function getSmoothCurrentTime(): number {
-  if (!usePlayerStore.getState().isPlaying || !hasTrack) {
+  const { isPlaying, playbackRate } = usePlayerStore.getState();
+  if (!isPlaying || !hasTrack) {
     lastSmoothTime = cachedTime;
     return cachedTime;
   }
   const now = Date.now();
   if (lastTickAt === 0 || now < lastTickAt) return cachedTime;
   const elapsed = (now - lastTickAt) / 1000;
-  const raw = Math.min(cachedTime + elapsed, cachedTime + 1.0);
+  const speed = clampPlaybackRate(playbackRate);
+  const raw = Math.min(cachedTime + elapsed * speed, cachedTime + Math.max(1.0, speed));
 
   if (raw + 0.08 < lastSmoothTime && lastSmoothTime - raw < 1.25) {
     return lastSmoothTime;
@@ -82,7 +84,11 @@ function inferCodecFromContentType(contentType: string | null | undefined): stri
   if (normalized.includes('opus')) return 'OPUS';
   if (normalized.includes('ogg')) return 'OGG';
   if (normalized.includes('mpeg') || normalized.includes('mp3')) return 'MP3';
-  if (normalized.includes('aac') || normalized.includes('mp4a') || normalized.includes('audio/mp4')) {
+  if (
+    normalized.includes('aac') ||
+    normalized.includes('mp4a') ||
+    normalized.includes('audio/mp4')
+  ) {
     return 'AAC';
   }
   if (normalized.includes('flac')) return 'FLAC';
@@ -173,6 +179,48 @@ function stopTrack() {
   lastSmoothTime = 0;
 }
 
+function resetLocalTrackState() {
+  hasTrack = false;
+  cachedTime = 0;
+  lastSmoothTime = 0;
+}
+
+async function syncNativeLoadState() {
+  if (!isTauriRuntime()) return;
+
+  const { eqEnabled, eqGains, normalizeVolume } = useSettingsStore.getState();
+  const playerState = usePlayerStore.getState();
+  const effectivePitchSemitones = getEffectivePitchSemitones(
+    playerState.playbackRate,
+    playerState.pitchControlMode,
+    playerState.pitchSemitones,
+  );
+
+  await Promise.all([
+    invoke('audio_set_eq', { enabled: eqEnabled, gains: eqGains }),
+    invoke('audio_set_normalization', { enabled: normalizeVolume }),
+    invoke('audio_set_volume', { volume: playerState.volume }),
+    invoke('audio_set_playback_rate', { playbackRate: playerState.playbackRate }),
+    invoke('audio_set_pitch', { pitchSemitones: effectivePitchSemitones }),
+  ]);
+}
+
+async function syncNativeRateAndPitch() {
+  if (!isTauriRuntime()) return;
+
+  const playerState = usePlayerStore.getState();
+  const effectivePitchSemitones = getEffectivePitchSemitones(
+    playerState.playbackRate,
+    playerState.pitchControlMode,
+    playerState.pitchSemitones,
+  );
+
+  await Promise.all([
+    invoke('audio_set_playback_rate', { playbackRate: playerState.playbackRate }),
+    invoke('audio_set_pitch', { pitchSemitones: effectivePitchSemitones }),
+  ]);
+}
+
 /** Reload the current track on new audio device, preserving position */
 export async function reloadCurrentTrack() {
   if (!isTauriRuntime()) return;
@@ -191,7 +239,16 @@ export async function reloadCurrentTrack() {
 async function loadTrack(track: Track, skipStop = false) {
   suppressStallDetection(4500);
   const gen = ++loadGen;
-  if (!skipStop) stopTrack();
+  if (!skipStop) {
+    if (isTauriRuntime()) {
+      try {
+        await invoke('audio_stop');
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    resetLocalTrackState();
+  }
   currentUrn = track.urn;
   const urn = track.urn;
 
@@ -219,13 +276,11 @@ async function loadTrack(track: Track, skipStop = false) {
 
   setupTauriBindings();
 
-  // Sync EQ state to Rust
-  const { eqEnabled, eqGains, normalizeVolume } = useSettingsStore.getState();
-  invoke('audio_set_eq', { enabled: eqEnabled, gains: eqGains }).catch(console.error);
-  invoke('audio_set_normalization', { enabled: normalizeVolume }).catch(console.error);
-
-  // Sync volume
-  invoke('audio_set_volume', { volume: usePlayerStore.getState().volume }).catch(console.error);
+  try {
+    await syncNativeLoadState();
+  } catch (error) {
+    console.error('[Audio] Failed to sync native state before load', error);
+  }
 
   // Try cached file first
   const cachedPath = await getCacheFilePath(urn);
@@ -370,6 +425,13 @@ async function loadTrack(track: Track, skipStop = false) {
     }
     return;
   }
+
+  try {
+    await syncNativeRateAndPitch();
+  } catch (error) {
+    console.error('[Audio] Failed to re-sync native speed/pitch after load', error);
+  }
+
   hasTrack = true;
   lastTickAt = Date.now();
 
@@ -530,8 +592,7 @@ function setupTauriBindings() {
   });
 
   listen('audio:ended', () => {
-    const nearTrackEnd =
-      cachedDuration > 0 && cachedTime >= Math.max(0, cachedDuration - 1.2);
+    const nearTrackEnd = cachedDuration > 0 && cachedTime >= Math.max(0, cachedDuration - 1.2);
     if (Date.now() < endedGuardUntil && !nearTrackEnd) {
       console.warn('[Audio] Ignoring spurious ended event during seek transition');
       return;
@@ -686,6 +747,24 @@ usePlayerStore.subscribe((state, prev) => {
 
   if (isTauriRuntime() && state.volume !== prev.volume) {
     invoke('audio_set_volume', { volume: state.volume }).catch(console.error);
+  }
+
+  if (isTauriRuntime() && state.playbackRate !== prev.playbackRate) {
+    invoke('audio_set_playback_rate', { playbackRate: state.playbackRate }).catch(console.error);
+  }
+
+  const effectivePitch = getEffectivePitchSemitones(
+    state.playbackRate,
+    state.pitchControlMode,
+    state.pitchSemitones,
+  );
+  const prevEffectivePitch = getEffectivePitchSemitones(
+    prev.playbackRate,
+    prev.pitchControlMode,
+    prev.pitchSemitones,
+  );
+  if (isTauriRuntime() && Math.abs(effectivePitch - prevEffectivePitch) >= 0.001) {
+    invoke('audio_set_pitch', { pitchSemitones: effectivePitch }).catch(console.error);
   }
 });
 

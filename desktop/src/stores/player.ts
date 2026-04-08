@@ -3,6 +3,42 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { tauriStorage } from '../lib/tauri-storage';
 import { useDislikesStore } from './dislikes';
 
+export const PLAYBACK_RATE_MIN = 0.5;
+export const PLAYBACK_RATE_MAX = 2.0;
+export const PLAYBACK_RATE_STEP = 0.05;
+export const PITCH_SEMITONES_MIN = -12;
+export const PITCH_SEMITONES_MAX = 12;
+export const PITCH_SEMITONES_STEP = 0.5;
+export type PitchControlMode = 'auto' | 'manual';
+
+export function clampPlaybackRate(value: number): number {
+  const clamped = Math.max(PLAYBACK_RATE_MIN, Math.min(PLAYBACK_RATE_MAX, value));
+  return Math.round(clamped * 100) / 100;
+}
+
+export function clampPitchSemitones(value: number): number {
+  const clamped = Math.max(PITCH_SEMITONES_MIN, Math.min(PITCH_SEMITONES_MAX, value));
+  const snapped = Math.round(clamped / PITCH_SEMITONES_STEP) * PITCH_SEMITONES_STEP;
+  return Math.round(snapped * 10) / 10;
+}
+
+export function getAutoPitchSemitones(playbackRate: number): number {
+  const safeRate = clampPlaybackRate(playbackRate);
+  const semitones = 12 * Math.log2(safeRate);
+  const clamped = Math.max(PITCH_SEMITONES_MIN, Math.min(PITCH_SEMITONES_MAX, semitones));
+  return Math.round(clamped * 10) / 10;
+}
+
+export function getEffectivePitchSemitones(
+  playbackRate: number,
+  pitchControlMode: PitchControlMode,
+  pitchSemitones: number,
+): number {
+  return pitchControlMode === 'auto'
+    ? getAutoPitchSemitones(playbackRate)
+    : clampPitchSemitones(pitchSemitones);
+}
+
 export interface Track {
   id: number;
   urn: string;
@@ -87,6 +123,9 @@ interface PlayerState {
   isPlaying: boolean;
   volume: number;
   volumeBeforeMute: number;
+  playbackRate: number;
+  pitchSemitones: number;
+  pitchControlMode: PitchControlMode;
   shuffle: boolean;
   repeat: RepeatMode;
 
@@ -98,6 +137,11 @@ interface PlayerState {
   next: () => void;
   prev: () => void;
   setVolume: (v: number) => void;
+  setPlaybackRate: (rate: number) => void;
+  resetPlaybackRate: () => void;
+  setPitchSemitones: (value: number) => void;
+  resetPitchSemitones: () => void;
+  setPitchControlMode: (mode: PitchControlMode) => void;
   setQueue: (queue: Track[]) => void;
   addToQueue: (tracks: Track[]) => void;
   addToQueueNext: (tracks: Track[]) => void;
@@ -123,6 +167,9 @@ export const usePlayerStore = create<PlayerState>()(
       isPlaying: false,
       volume: 50,
       volumeBeforeMute: 50,
+      playbackRate: 1,
+      pitchSemitones: 0,
+      pitchControlMode: 'manual',
       shuffle: false,
       repeat: 'off',
 
@@ -257,6 +304,12 @@ export const usePlayerStore = create<PlayerState>()(
         });
       },
 
+      setPlaybackRate: (rate) => set({ playbackRate: clampPlaybackRate(rate) }),
+      resetPlaybackRate: () => set({ playbackRate: 1 }),
+      setPitchSemitones: (value) => set({ pitchSemitones: clampPitchSemitones(value) }),
+      resetPitchSemitones: () => set({ pitchSemitones: 0 }),
+      setPitchControlMode: (mode) => set({ pitchControlMode: mode }),
+
       setQueue: (queue) =>
         set((s) => {
           const uniqueQueue = dedupeTracks(queue);
@@ -273,7 +326,9 @@ export const usePlayerStore = create<PlayerState>()(
       addToQueue: (tracks) =>
         set((s) => {
           const queue = appendUniqueTracks(s.queue, tracks);
-          const originalQueue = s.originalQueue ? appendUniqueTracks(s.originalQueue, tracks) : null;
+          const originalQueue = s.originalQueue
+            ? appendUniqueTracks(s.originalQueue, tracks)
+            : null;
           return { queue, originalQueue };
         }),
 
@@ -283,9 +338,7 @@ export const usePlayerStore = create<PlayerState>()(
           const queue = insertUniqueTracks(s.queue, tracks, insertIndex);
           return {
             queue,
-            originalQueue: s.originalQueue
-              ? appendUniqueTracks(s.originalQueue, tracks)
-              : null,
+            originalQueue: s.originalQueue ? appendUniqueTracks(s.originalQueue, tracks) : null,
           };
         }),
 
@@ -321,7 +374,8 @@ export const usePlayerStore = create<PlayerState>()(
           return { queue, queueIndex };
         }),
 
-      clearQueue: () => set({ queue: [], queueIndex: -1, queueSource: 'manual', originalQueue: null }),
+      clearQueue: () =>
+        set({ queue: [], queueIndex: -1, queueSource: 'manual', originalQueue: null }),
 
       toggleShuffle: () => {
         const { shuffle, queue, queueIndex, currentTrack } = get();
@@ -376,16 +430,32 @@ export const usePlayerStore = create<PlayerState>()(
     {
       name: 'sc-player',
       storage: createJSONStorage(() => tauriStorage),
-      version: 3,
+      version: 6,
       migrate: (persistedState) => {
         const state = (
           persistedState && typeof persistedState === 'object' ? persistedState : {}
         ) as Partial<PlayerState>;
         return state;
       },
+      merge: (persistedState, currentState) => {
+        const state = (
+          persistedState && typeof persistedState === 'object' ? persistedState : {}
+        ) as Partial<PlayerState>;
+
+        return {
+          ...currentState,
+          ...state,
+          playbackRate: clampPlaybackRate(state.playbackRate ?? currentState.playbackRate),
+          pitchSemitones: clampPitchSemitones(state.pitchSemitones ?? currentState.pitchSemitones),
+          pitchControlMode: state.pitchControlMode === 'auto' ? 'auto' : 'manual',
+        };
+      },
       partialize: (state) => ({
         volume: state.volume,
         volumeBeforeMute: state.volumeBeforeMute,
+        playbackRate: state.playbackRate,
+        pitchSemitones: state.pitchSemitones,
+        pitchControlMode: state.pitchControlMode,
         currentTrack: state.currentTrack,
         queue: state.queue,
         originalQueue: state.originalQueue,

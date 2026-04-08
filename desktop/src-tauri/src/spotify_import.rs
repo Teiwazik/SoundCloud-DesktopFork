@@ -1,7 +1,7 @@
+use base64::{engine::general_purpose, Engine as _};
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use base64::{Engine as _, engine::general_purpose};
-use sha2::{Sha256, Digest};
 use tauri::{AppHandle, Emitter, Manager};
 
 // ── PKCE helpers ──────────────────────────────────────────────────
@@ -35,7 +35,9 @@ pub struct SpotifyState {
 
 impl SpotifyState {
     pub fn new() -> Self {
-        Self { access_token: Mutex::new(None) }
+        Self {
+            access_token: Mutex::new(None),
+        }
     }
 }
 
@@ -96,10 +98,7 @@ struct ScTrackResult {
 // ── Auth command ──────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn spotify_auth_start(
-    client_id: String,
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn spotify_auth_start(client_id: String, app: AppHandle) -> Result<(), String> {
     // Pick a free TCP port
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -141,7 +140,11 @@ pub async fn spotify_auth_start(
             let query = path.split('?').nth(1)?;
             query.split('&').find_map(|kv| {
                 let mut parts = kv.splitn(2, '=');
-                if parts.next()? == "code" { parts.next().map(|v| v.to_string()) } else { None }
+                if parts.next()? == "code" {
+                    parts.next().map(|v| v.to_string())
+                } else {
+                    None
+                }
             })
         })
         .ok_or("No code in callback")?;
@@ -176,8 +179,13 @@ pub async fn spotify_auth_start(
     }
 
     let raw = token_resp.text().await.map_err(|e| e.to_string())?;
-    let token: SpotifyTokenResponse = serde_json::from_str(&raw)
-        .map_err(|e| format!("Token parse error: {} — body: {}", e, &raw[..raw.len().min(300)]))?;
+    let token: SpotifyTokenResponse = serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "Token parse error: {} — body: {}",
+            e,
+            &raw[..raw.len().min(300)]
+        )
+    })?;
 
     {
         let state = app.state::<SpotifyState>();
@@ -190,7 +198,11 @@ pub async fn spotify_auth_start(
 
 #[tauri::command]
 pub fn spotify_is_authed(app: AppHandle) -> bool {
-    app.state::<SpotifyState>().access_token.lock().unwrap().is_some()
+    app.state::<SpotifyState>()
+        .access_token
+        .lock()
+        .unwrap()
+        .is_some()
 }
 
 #[tauri::command]
@@ -223,7 +235,9 @@ pub async fn spotify_import_start(
     // Paginate all liked songs
     let mut url = "https://api.spotify.com/v1/me/tracks?limit=50&offset=0".to_string();
     loop {
-        if CANCEL_FLAG.load(Ordering::Relaxed) { break; }
+        if CANCEL_FLAG.load(Ordering::Relaxed) {
+            break;
+        }
         let resp = client
             .get(&url)
             .bearer_auth(&access_token)
@@ -242,12 +256,21 @@ pub async fn spotify_import_start(
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Spotify API error {}: {}", status, &body[..body.len().min(300)]));
+            return Err(format!(
+                "Spotify API error {}: {}",
+                status,
+                &body[..body.len().min(300)]
+            ));
         }
 
         let raw = resp.text().await.map_err(|e| e.to_string())?;
-        let page: SpotifySavedTracksPage = serde_json::from_str(&raw)
-            .map_err(|e| format!("Spotify API parse error: {} — body: {}", e, &raw[..raw.len().min(300)]))?;
+        let page: SpotifySavedTracksPage = serde_json::from_str(&raw).map_err(|e| {
+            format!(
+                "Spotify API parse error: {} — body: {}",
+                e,
+                &raw[..raw.len().min(300)]
+            )
+        })?;
 
         for item in &page.items {
             if let Some(track) = &item.track {
@@ -277,16 +300,22 @@ pub async fn spotify_import_start(
     let mut found_urns: Vec<String> = Vec::new();
 
     for (i, (title, artist)) in all_tracks.iter().enumerate() {
-        if CANCEL_FLAG.load(Ordering::Relaxed) { break; }
+        if CANCEL_FLAG.load(Ordering::Relaxed) {
+            break;
+        }
 
         let current_track = format!("{} - {}", artist, title);
-        app.emit("spotify_import:progress", SpotifyImportProgress {
-            total,
-            current: i + 1,
-            found,
-            not_found,
-            current_track: current_track.clone(),
-        }).ok();
+        app.emit(
+            "spotify_import:progress",
+            SpotifyImportProgress {
+                total,
+                current: i + 1,
+                found,
+                not_found,
+                current_track: current_track.clone(),
+            },
+        )
+        .ok();
 
         let query = format!("{} {}", artist, title);
         let search_url = format!(
@@ -319,13 +348,17 @@ pub async fn spotify_import_start(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    app.emit("spotify_import:progress", SpotifyImportProgress {
-        total,
-        current: total,
-        found,
-        not_found,
-        current_track: String::new(),
-    }).ok();
+    app.emit(
+        "spotify_import:progress",
+        SpotifyImportProgress {
+            total,
+            current: total,
+            found,
+            not_found,
+            current_track: String::new(),
+        },
+    )
+    .ok();
 
     Ok(found_urns)
 }

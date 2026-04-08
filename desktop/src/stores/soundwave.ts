@@ -8,6 +8,7 @@ import {
   analyzeTrackLanguage,
   detectLanguage,
   filterByLanguage,
+  SUPPORTED_LANGUAGES,
   type TrackLanguageProfile,
 } from '../lib/language-detection';
 import { getLikedUrnsSnapshot, initLikedUrns } from '../lib/likes';
@@ -440,6 +441,8 @@ let globalDiscoveryInFlight: Promise<Track[]> | null = null;
 let inFlightGenerateBatch: Promise<Track[]> | null = null;
 let startupProgressHideTimer: ReturnType<typeof setTimeout> | null = null;
 
+const SUPPORTED_LANGUAGE_CODES = new Set(SUPPORTED_LANGUAGES.map((lang) => lang.code));
+
 const clampProgress = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 
 type StartupStageKey =
@@ -470,6 +473,36 @@ const isTrackPlayable = (track: Track): boolean => {
   return true;
 };
 
+const normalizePreferredLanguageCodes = (value: string[] | string | null | undefined): string[] => {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === 'string' && value.trim() && value !== 'all'
+      ? [value]
+      : [];
+
+  const deduped = new Set<string>();
+  for (const entry of source) {
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized || normalized === 'all' || !SUPPORTED_LANGUAGE_CODES.has(normalized)) continue;
+    deduped.add(normalized);
+  }
+
+  return Array.from(deduped);
+};
+
+const getPreferredLanguageCodes = (settings: {
+  preferredLanguages?: string[];
+  preferredLanguage?: string;
+}): string[] =>
+  normalizePreferredLanguageCodes(
+    Array.isArray(settings.preferredLanguages)
+      ? settings.preferredLanguages
+      : settings.preferredLanguage,
+  );
+
+const formatPreferredLanguageCodes = (preferredLanguages: string[]): string =>
+  preferredLanguages.length > 0 ? preferredLanguages.join(', ') : 'all';
+
 const trackMatchesPreferredLanguage = (track: Track, preferredLanguage: string): boolean => {
   const text = `${track.title || ''} ${track.description || ''} ${track.user?.username || ''}`;
   if (!text.trim()) return false;
@@ -479,6 +512,13 @@ const trackMatchesPreferredLanguage = (track: Track, preferredLanguage: string):
   if (scriptRegex?.test(text)) return true;
 
   return detectLanguage(text) === preferredLanguage;
+};
+
+const trackMatchesPreferredLanguages = (track: Track, preferredLanguages: string[]): boolean => {
+  if (preferredLanguages.length === 0) return true;
+  return preferredLanguages.some((preferredLanguage) =>
+    trackMatchesPreferredLanguage(track, preferredLanguage),
+  );
 };
 
 const normalizeGenreToken = (value: string): string =>
@@ -601,10 +641,7 @@ const rememberMertFeatureUpsert = (urn: string, ts: number) => {
   }
 };
 
-const schedulePlayedFeatureFlush = (
-  getState: () => SoundWaveState,
-  delayMs = 900,
-) => {
+const schedulePlayedFeatureFlush = (getState: () => SoundWaveState, delayMs = 900) => {
   if (playedFeatureFlushTimer) return;
   playedFeatureFlushTimer = setTimeout(() => {
     playedFeatureFlushTimer = null;
@@ -620,7 +657,10 @@ const flushPlayedFeatureQueue = async (getState: () => SoundWaveState) => {
   if (!qdrant) return;
 
   playedFeatureFlushInFlight = true;
-  const batch = Array.from(playedFeatureUpsertQueue.values()).slice(0, PLAYED_FEATURE_UPSERT_BATCH_SIZE);
+  const batch = Array.from(playedFeatureUpsertQueue.values()).slice(
+    0,
+    PLAYED_FEATURE_UPSERT_BATCH_SIZE,
+  );
   for (const item of batch) {
     playedFeatureUpsertQueue.delete(item.track.urn);
   }
@@ -892,20 +932,22 @@ const fetchStrictGenreFallbackTracks = async (selectedGenres: string[]): Promise
 
 const applyLanguageFilterWithEnrichment = async <T extends Track>(
   tracks: T[],
-  preferredLanguage: string,
+  preferredLanguages: string[],
 ): Promise<{ filtered: T[]; profiles: Map<number, TrackLanguageProfile> }> => {
   const playableTracks = tracks.filter((track) => isTrackPlayable(track as Track));
+  const normalizedLanguages = normalizePreferredLanguageCodes(preferredLanguages);
 
   const quickProfiles = new Map<number, TrackLanguageProfile>();
   for (const track of playableTracks) {
     quickProfiles.set(track.id, buildFastLanguageProfile(track as Track));
   }
 
-  if (preferredLanguage === 'all') {
+  if (normalizedLanguages.length === 0) {
     return { filtered: playableTracks, profiles: quickProfiles };
   }
 
-  let filtered = filterByLanguage(playableTracks, quickProfiles, preferredLanguage);
+  const preferredLanguageSet = new Set(normalizedLanguages);
+  let filtered = filterByLanguage(playableTracks, quickProfiles, normalizedLanguages);
   const quickEnoughThreshold = Math.min(20, Math.max(10, Math.floor(playableTracks.length * 0.14)));
   if (filtered.length >= quickEnoughThreshold) {
     return { filtered, profiles: quickProfiles };
@@ -915,7 +957,7 @@ const applyLanguageFilterWithEnrichment = async <T extends Track>(
     .filter((track) => {
       const profile = quickProfiles.get(track.id);
       if (!profile) return true;
-      if (profile.primaryLanguage === preferredLanguage) return true;
+      if (preferredLanguageSet.has(profile.primaryLanguage)) return true;
       if (profile.confidence < 0.55) return true;
       if (profile.primaryLanguage === 'en') return true;
       return false;
@@ -929,29 +971,37 @@ const applyLanguageFilterWithEnrichment = async <T extends Track>(
     for (const profile of deepProfiles) {
       quickProfiles.set(profile.trackId, profile);
     }
-    filtered = filterByLanguage(playableTracks, quickProfiles, preferredLanguage);
+    filtered = filterByLanguage(playableTracks, quickProfiles, normalizedLanguages);
   }
 
   if (filtered.length === 0) {
-    const scriptRegex = LANGUAGE_SCRIPT_REGEX[preferredLanguage];
-    if (scriptRegex) {
-      const scriptMatches = playableTracks.filter((track) =>
-        scriptRegex.test(`${track.title || ''} ${track.description || ''}`),
-      );
-      if (scriptMatches.length > 0) {
-        for (const track of scriptMatches) {
-          const existing = quickProfiles.get(track.id);
-          quickProfiles.set(track.id, {
-            trackId: track.id,
-            languages: {
-              ...(existing?.languages || {}),
-              [preferredLanguage]: (existing?.languages?.[preferredLanguage] || 0) + 2,
-            },
-            primaryLanguage: preferredLanguage,
-            confidence: Math.max(existing?.confidence || 0, 0.65),
-          });
+    const scriptMatchesByTrackId = new Map<number, { track: T; language: string }>();
+
+    for (const preferredLanguage of normalizedLanguages) {
+      const scriptRegex = LANGUAGE_SCRIPT_REGEX[preferredLanguage];
+      if (!scriptRegex) continue;
+
+      for (const track of playableTracks) {
+        if (!scriptRegex.test(`${track.title || ''} ${track.description || ''}`)) continue;
+        if (!scriptMatchesByTrackId.has(track.id)) {
+          scriptMatchesByTrackId.set(track.id, { track, language: preferredLanguage });
         }
-        filtered = scriptMatches;
+      }
+    }
+
+    if (scriptMatchesByTrackId.size > 0) {
+      filtered = Array.from(scriptMatchesByTrackId.values(), ({ track }) => track);
+      for (const { track, language } of scriptMatchesByTrackId.values()) {
+        const existing = quickProfiles.get(track.id);
+        quickProfiles.set(track.id, {
+          trackId: track.id,
+          languages: {
+            ...(existing?.languages || {}),
+            [language]: (existing?.languages?.[language] || 0) + 2,
+          },
+          primaryLanguage: language,
+          confidence: Math.max(existing?.confidence || 0, 0.65),
+        });
       }
     }
   }
@@ -959,7 +1009,12 @@ const applyLanguageFilterWithEnrichment = async <T extends Track>(
   return { filtered, profiles: quickProfiles };
 };
 
-const fetchLanguageSearchTracks = async (preferredLanguage: string): Promise<Track[]> => {
+const getLanguagePoolCacheKey = (preferredLanguages: string[]): string =>
+  [...preferredLanguages].sort().join(',');
+
+const fetchLanguageSearchTracksForLanguage = async (
+  preferredLanguage: string,
+): Promise<Track[]> => {
   const cached = languagePoolCache.get(preferredLanguage);
   if (cached && Date.now() - cached.ts < LANGUAGE_POOL_CACHE_TTL_MS) {
     return cached.tracks;
@@ -1035,7 +1090,7 @@ const fetchLanguageSearchTracks = async (preferredLanguage: string): Promise<Tra
 
     const globalDiscoveryTracks = await fetchGlobalDiscoveryTracks().catch(() => [] as Track[]);
     const globalLanguageTracks = globalDiscoveryTracks.filter((track) =>
-      trackMatchesPreferredLanguage(track, preferredLanguage),
+      trackMatchesPreferredLanguages(track, [preferredLanguage]),
     );
 
     const dedup = new Map<string, Track>();
@@ -1055,6 +1110,49 @@ const fetchLanguageSearchTracks = async (preferredLanguage: string): Promise<Tra
   });
 
   languagePoolInFlight.set(preferredLanguage, task);
+  return task;
+};
+
+const fetchLanguageSearchTracks = async (preferredLanguages: string[]): Promise<Track[]> => {
+  const normalizedLanguages = normalizePreferredLanguageCodes(preferredLanguages);
+  if (normalizedLanguages.length === 0) {
+    return [];
+  }
+  if (normalizedLanguages.length === 1) {
+    return fetchLanguageSearchTracksForLanguage(normalizedLanguages[0]);
+  }
+
+  const cacheKey = getLanguagePoolCacheKey(normalizedLanguages);
+  const cached = languagePoolCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < LANGUAGE_POOL_CACHE_TTL_MS) {
+    return cached.tracks;
+  }
+  if (languagePoolInFlight.has(cacheKey)) {
+    return languagePoolInFlight.get(cacheKey) as Promise<Track[]>;
+  }
+
+  const task = (async () => {
+    const pools = await Promise.all(
+      normalizedLanguages.map((preferredLanguage) =>
+        fetchLanguageSearchTracksForLanguage(preferredLanguage),
+      ),
+    );
+
+    const dedup = new Map<string, Track>();
+    for (const track of pools.flat()) {
+      if (!dedup.has(track.urn)) {
+        dedup.set(track.urn, track);
+      }
+    }
+
+    const tracks = Array.from(dedup.values()).slice(0, 420);
+    languagePoolCache.set(cacheKey, { ts: Date.now(), tracks });
+    return tracks;
+  })().finally(() => {
+    languagePoolInFlight.delete(cacheKey);
+  });
+
+  languagePoolInFlight.set(cacheKey, task);
   return task;
 };
 
@@ -1220,9 +1318,7 @@ const SOUNDWAVE_HIDE_LIKED_RELATED_LIMIT = 40;
 
 const isHiddenLikedTrack = (track: Track, likedUrns: Set<string>): boolean => {
   const rankedTrack = track as Partial<RankedTrack>;
-  return (
-    likedUrns.has(track.urn) || Boolean(track.user_favorite) || Boolean(rankedTrack._isLiked)
-  );
+  return likedUrns.has(track.urn) || Boolean(track.user_favorite) || Boolean(rankedTrack._isLiked);
 };
 
 const dedupeTracksByUrn = <T extends Track>(tracks: T[]): T[] => {
@@ -1312,10 +1408,13 @@ const topUpCandidatesAfterHideLiked = async ({
 
   const existingUrns = new Set(candidates.map((track) => track.urn));
   const modeFallbackPool =
-    currentPreset?.mode === 'favorite' ? [...seedTracks, ...explorePool] : [...explorePool, ...seedTracks];
+    currentPreset?.mode === 'favorite'
+      ? [...seedTracks, ...explorePool]
+      : [...explorePool, ...seedTracks];
+  const preferredLanguageCodes = getPreferredLanguageCodes(settings);
   const languagePool =
-    settings.languageFilterEnabled && settings.preferredLanguage !== 'all'
-      ? await fetchLanguageSearchTracks(settings.preferredLanguage)
+    settings.languageFilterEnabled && preferredLanguageCodes.length > 0
+      ? await fetchLanguageSearchTracks(preferredLanguageCodes)
       : [];
 
   let fallbackSource = dedupeTracksByUrn([...languagePool, ...modeFallbackPool]).filter((track) => {
@@ -1328,10 +1427,10 @@ const topUpCandidatesAfterHideLiked = async ({
   });
 
   let nextProfiles = enrichedProfiles;
-  if (settings.languageFilterEnabled && settings.preferredLanguage !== 'all') {
+  if (settings.languageFilterEnabled && preferredLanguageCodes.length > 0) {
     const { filtered, profiles } = await applyLanguageFilterWithEnrichment(
       fallbackSource.slice(0, 720),
-      settings.preferredLanguage,
+      preferredLanguageCodes,
     );
     fallbackSource = filtered;
     nextProfiles = mergeTrackLanguageProfiles(nextProfiles, profiles);
@@ -1344,7 +1443,9 @@ const topUpCandidatesAfterHideLiked = async ({
     strictGenreSelection.length > 0 ? buildGenreMatchTerms(strictGenreSelection) : [];
 
   if (strictGenreTerms.length > 0) {
-    fallbackSource = fallbackSource.filter((track) => trackMatchesSelectedGenres(track, strictGenreTerms));
+    fallbackSource = fallbackSource.filter((track) =>
+      trackMatchesSelectedGenres(track, strictGenreTerms),
+    );
   }
 
   if (fallbackSource.length === 0) {
@@ -1705,7 +1806,11 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
 
     try {
       console.log('[SoundWave] Generating first batch...');
-      set({ startupVisible: true, startupProgress: Math.max(get().startupProgress, 86), startupStage: 'batch' });
+      set({
+        startupVisible: true,
+        startupProgress: Math.max(get().startupProgress, 86),
+        startupStage: 'batch',
+      });
       const batch = await generateBatch({ startup: true });
       console.log(`[SoundWave] First batch generated: ${batch.length} tracks`);
       if (batch.length > 0) {
@@ -1775,7 +1880,12 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
     const safeIndex = Math.max(0, Math.min(suspendedQueueIndex, suspendedQueue.length - 1));
     const resumeTrack = suspendedQueue[safeIndex];
     if (!resumeTrack) {
-      set({ isSuspended: false, startupStage: 'idle', suspendedQueue: null, suspendedQueueIndex: -1 });
+      set({
+        isSuspended: false,
+        startupStage: 'idle',
+        suspendedQueue: null,
+        suspendedQueueIndex: -1,
+      });
       return false;
     }
 
@@ -2056,7 +2166,8 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
               if (currentPreset?.mode === 'popular') {
                 score += computePopularSocialBoost(
                   payload.playback_count as number,
-                  ((payload.likes_count as number) || (payload.favoritings_count as number)) as number,
+                  ((payload.likes_count as number) ||
+                    (payload.favoritings_count as number)) as number,
                   payload.comment_count as number,
                 );
               }
@@ -2154,28 +2265,26 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
               settings.soundwaveSelectedGenres.some(
                 (genre) => normalizeGenreToken(genre).length > 0,
               );
+            const preferredLanguageCodes = getPreferredLanguageCodes(settings);
+            const preferredLanguageLabel = formatPreferredLanguageCodes(preferredLanguageCodes);
             let candidatesForFinalize = rankedCandidates;
             let enrichedProfiles: Map<number, TrackLanguageProfile> | null = null;
 
-            if (settings.languageFilterEnabled && settings.preferredLanguage !== 'all') {
+            if (settings.languageFilterEnabled && preferredLanguageCodes.length > 0) {
               updateStartup(94, 'language');
               const minLanguageCandidates = 12;
               const { filtered: languageScoped, profiles } =
-                await applyLanguageFilterWithEnrichment(
-                  rankedCandidates,
-                  settings.preferredLanguage,
-                );
+                await applyLanguageFilterWithEnrichment(rankedCandidates, preferredLanguageCodes);
               enrichedProfiles = profiles;
               if (languageScoped.length >= minLanguageCandidates) {
                 console.log(
-                  `[SoundWave] Language filter '${settings.preferredLanguage}': ${languageScoped.length}/${rankedCandidates.length} candidates`,
+                  `[SoundWave] Language filter '${preferredLanguageLabel}': ${languageScoped.length}/${rankedCandidates.length} candidates`,
                 );
                 candidatesForFinalize = languageScoped;
                 updateStartup(95, 'language');
               } else {
-                const languageSearchTracks = await fetchLanguageSearchTracks(
-                  settings.preferredLanguage,
-                );
+                const languageSearchTracks =
+                  await fetchLanguageSearchTracks(preferredLanguageCodes);
                 const modeFallbackPool =
                   currentPreset?.mode === 'favorite'
                     ? [...seedTracks, ...explorePool]
@@ -2188,10 +2297,7 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
                   .slice(0, 520);
 
                 const { filtered: languageFallback, profiles: fallbackProfiles } =
-                  await applyLanguageFilterWithEnrichment(
-                    fallbackSource,
-                    settings.preferredLanguage,
-                  );
+                  await applyLanguageFilterWithEnrichment(fallbackSource, preferredLanguageCodes);
 
                 if (languageFallback.length > 0) {
                   const fallbackRanked = languageFallback.map((track) => {
@@ -2213,11 +2319,11 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
                     const topup = fallbackRanked.filter((track) => !scopedUrns.has(track.urn));
                     candidatesForFinalize = [...languageScoped, ...topup];
                     console.warn(
-                      `[SoundWave] Language filter '${settings.preferredLanguage}' low (${languageScoped.length}), topped up with fallback to ${candidatesForFinalize.length}`,
+                      `[SoundWave] Language filter '${preferredLanguageLabel}' low (${languageScoped.length}), topped up with fallback to ${candidatesForFinalize.length}`,
                     );
                   } else {
                     console.warn(
-                      `[SoundWave] Qdrant has 0 '${settings.preferredLanguage}' candidates, using language fallback pool: ${fallbackRanked.length}`,
+                      `[SoundWave] Qdrant has 0 '${preferredLanguageLabel}' candidates, using language fallback pool: ${fallbackRanked.length}`,
                     );
                     candidatesForFinalize = fallbackRanked;
                   }
@@ -2232,18 +2338,18 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
                 } else {
                   if (languageScoped.length > 0) {
                     console.warn(
-                      `[SoundWave] Language filter '${settings.preferredLanguage}' limited to ${languageScoped.length} tracks (fallback empty)`,
+                      `[SoundWave] Language filter '${preferredLanguageLabel}' limited to ${languageScoped.length} tracks (fallback empty)`,
                     );
                     candidatesForFinalize = languageScoped;
                   } else {
                     if (hasStrictGenreFilter) {
                       console.warn(
-                        `[SoundWave] No '${settings.preferredLanguage}' tracks in language pool, continuing with strict genre fallback`,
+                        `[SoundWave] No '${preferredLanguageLabel}' tracks in language pool, continuing with strict genre fallback`,
                       );
                       candidatesForFinalize = [];
                     } else {
                       console.warn(
-                        `[SoundWave] No '${settings.preferredLanguage}' tracks found even in fallback pool`,
+                        `[SoundWave] No '${preferredLanguageLabel}' tracks found even in fallback pool`,
                       );
                       return [];
                     }
@@ -2273,9 +2379,9 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
                 candidatesForFinalize = genreScoped;
               } else {
                 updateStartup(95, 'filter');
-                const fallbackSource = (await fetchStrictGenreFallbackTracks(
-                  settings.soundwaveSelectedGenres,
-                )).filter(
+                const fallbackSource = (
+                  await fetchStrictGenreFallbackTracks(settings.soundwaveSelectedGenres)
+                ).filter(
                   (track) =>
                     isTrackPlayable(track) &&
                     !playedUrns.has(track.urn) &&
@@ -2285,12 +2391,9 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
                 let strictGenreFallbackTracks = fallbackSource;
                 let strictGenreFallbackProfiles: Map<number, TrackLanguageProfile> | null = null;
 
-                if (settings.languageFilterEnabled && settings.preferredLanguage !== 'all') {
+                if (settings.languageFilterEnabled && preferredLanguageCodes.length > 0) {
                   const { filtered: languageScopedFallback, profiles: languageFallbackProfiles } =
-                    await applyLanguageFilterWithEnrichment(
-                      fallbackSource,
-                      settings.preferredLanguage,
-                    );
+                    await applyLanguageFilterWithEnrichment(fallbackSource, preferredLanguageCodes);
                   strictGenreFallbackTracks = languageScopedFallback;
                   strictGenreFallbackProfiles = languageFallbackProfiles;
                 }
@@ -2507,7 +2610,11 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
         const plays = track.playback_count || 0;
         if (currentPreset?.mode === 'popular') {
           score += Math.min(10, plays / 100000);
-          score += computePopularSocialBoost(track.playback_count, track.likes_count, track.comment_count);
+          score += computePopularSocialBoost(
+            track.playback_count,
+            track.likes_count,
+            track.comment_count,
+          );
           const createdAtTs = track.created_at ? Date.parse(track.created_at) : Number.NaN;
           if (Number.isFinite(createdAtTs)) {
             const ageDays = (Date.now() - createdAtTs) / (1000 * 60 * 60 * 24);
@@ -2537,25 +2644,27 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
       const hasStrictGenreFilter =
         settings.soundwaveGenreStrict &&
         settings.soundwaveSelectedGenres.some((genre) => normalizeGenreToken(genre).length > 0);
+      const preferredLanguageCodes = getPreferredLanguageCodes(settings);
+      const preferredLanguageLabel = formatPreferredLanguageCodes(preferredLanguageCodes);
       let candidatesForFinalize = candidates;
       let enrichedProfiles: Map<number, TrackLanguageProfile> | null = null;
 
-      if (settings.languageFilterEnabled && settings.preferredLanguage !== 'all') {
+      if (settings.languageFilterEnabled && preferredLanguageCodes.length > 0) {
         updateStartup(94, 'language');
         const minLanguageCandidates = 12;
         const { filtered: languageScoped, profiles } = await applyLanguageFilterWithEnrichment(
           candidates,
-          settings.preferredLanguage,
+          preferredLanguageCodes,
         );
         enrichedProfiles = profiles;
         if (languageScoped.length >= minLanguageCandidates) {
           console.log(
-            `[SoundWave] Language filter '${settings.preferredLanguage}': ${languageScoped.length}/${candidates.length} candidates`,
+            `[SoundWave] Language filter '${preferredLanguageLabel}': ${languageScoped.length}/${candidates.length} candidates`,
           );
           candidatesForFinalize = languageScoped;
           updateStartup(95, 'language');
         } else {
-          const languageSearchTracks = await fetchLanguageSearchTracks(settings.preferredLanguage);
+          const languageSearchTracks = await fetchLanguageSearchTracks(preferredLanguageCodes);
           const modeFallbackPool =
             currentPreset?.mode === 'favorite'
               ? [...seedTracks, ...explorePool]
@@ -2567,7 +2676,7 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
             .slice(0, 520);
 
           const { filtered: languageFallback, profiles: fallbackProfiles } =
-            await applyLanguageFilterWithEnrichment(fallbackSource, settings.preferredLanguage);
+            await applyLanguageFilterWithEnrichment(fallbackSource, preferredLanguageCodes);
 
           if (languageFallback.length > 0) {
             const fallbackRanked = languageFallback.map((track) => {
@@ -2588,11 +2697,11 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
               const topup = fallbackRanked.filter((track) => !scopedUrns.has(track.urn));
               candidatesForFinalize = [...languageScoped, ...topup];
               console.warn(
-                `[SoundWave] Language filter '${settings.preferredLanguage}' low (${languageScoped.length}), topped up with fallback to ${candidatesForFinalize.length}`,
+                `[SoundWave] Language filter '${preferredLanguageLabel}' low (${languageScoped.length}), topped up with fallback to ${candidatesForFinalize.length}`,
               );
             } else {
               console.warn(
-                `[SoundWave] Legacy has 0 '${settings.preferredLanguage}' candidates, using language fallback pool: ${fallbackRanked.length}`,
+                `[SoundWave] Legacy has 0 '${preferredLanguageLabel}' candidates, using language fallback pool: ${fallbackRanked.length}`,
               );
               candidatesForFinalize = fallbackRanked;
             }
@@ -2607,18 +2716,18 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
           } else {
             if (languageScoped.length > 0) {
               console.warn(
-                `[SoundWave] Language filter '${settings.preferredLanguage}' limited to ${languageScoped.length} tracks (fallback empty)`,
+                `[SoundWave] Language filter '${preferredLanguageLabel}' limited to ${languageScoped.length} tracks (fallback empty)`,
               );
               candidatesForFinalize = languageScoped;
             } else {
               if (hasStrictGenreFilter) {
                 console.warn(
-                  `[SoundWave] No '${settings.preferredLanguage}' tracks in language pool, continuing with strict genre fallback`,
+                  `[SoundWave] No '${preferredLanguageLabel}' tracks in language pool, continuing with strict genre fallback`,
                 );
                 candidatesForFinalize = [];
               } else {
                 console.warn(
-                  `[SoundWave] No '${settings.preferredLanguage}' tracks found even in fallback pool`,
+                  `[SoundWave] No '${preferredLanguageLabel}' tracks found even in fallback pool`,
                 );
                 return [];
               }
@@ -2628,7 +2737,9 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
       }
 
       const strictGenreSelection = settings.soundwaveGenreStrict
-        ? settings.soundwaveSelectedGenres.map((genre) => normalizeGenreToken(genre)).filter(Boolean)
+        ? settings.soundwaveSelectedGenres
+            .map((genre) => normalizeGenreToken(genre))
+            .filter(Boolean)
         : [];
       const strictGenreTerms =
         strictGenreSelection.length > 0 ? buildGenreMatchTerms(strictGenreSelection) : [];
@@ -2646,19 +2757,21 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
           candidatesForFinalize = genreScoped;
         } else {
           updateStartup(95, 'filter');
-          const fallbackSource = (await fetchStrictGenreFallbackTracks(
-            settings.soundwaveSelectedGenres,
-          )).filter(
+          const fallbackSource = (
+            await fetchStrictGenreFallbackTracks(settings.soundwaveSelectedGenres)
+          ).filter(
             (track) =>
-              isTrackPlayable(track) && !playedUrns.has(track.urn) && !dislikedUrns.includes(track.urn),
+              isTrackPlayable(track) &&
+              !playedUrns.has(track.urn) &&
+              !dislikedUrns.includes(track.urn),
           );
 
           let strictGenreFallbackTracks = fallbackSource;
           let strictGenreFallbackProfiles: Map<number, TrackLanguageProfile> | null = null;
 
-          if (settings.languageFilterEnabled && settings.preferredLanguage !== 'all') {
+          if (settings.languageFilterEnabled && preferredLanguageCodes.length > 0) {
             const { filtered: languageScopedFallback, profiles: languageFallbackProfiles } =
-              await applyLanguageFilterWithEnrichment(fallbackSource, settings.preferredLanguage);
+              await applyLanguageFilterWithEnrichment(fallbackSource, preferredLanguageCodes);
             strictGenreFallbackTracks = languageScopedFallback;
             strictGenreFallbackProfiles = languageFallbackProfiles;
           }
@@ -2674,7 +2787,7 @@ export const useSoundWaveStore = create<SoundWaveState>((set, get) => ({
                 : -1;
               return {
                 ...track,
-                    _swScore: (currentPreset?.mode === 'favorite' ? 4.5 : 5.4) + Math.random() * 1.1,
+                _swScore: (currentPreset?.mode === 'favorite' ? 4.5 : 5.4) + Math.random() * 1.1,
                 _isLiked: likedUrns.has(track.urn) || Boolean(track.user_favorite),
                 _isHeard: heardRank >= 0,
                 _heardRank: heardRank,

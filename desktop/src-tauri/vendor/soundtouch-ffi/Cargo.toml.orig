@@ -1,0 +1,30 @@
+[package]
+authors = ["Cyanism <github@cyan.slmail.me>"]
+categories = ["external-ffi-bindings", "multimedia::audio"]
+description = "Rust bindings to the SoundTouch C++ audio library."
+edition = "2021"
+license = "LGPL-2.1"
+keywords = ["soundtouch", "audio", "music", "audio-processing", "audio-library"]
+name = "soundtouch-ffi"
+readme = "README.md"
+repository = "https://github.com/Cyanistic/soundtouch-ffi"
+version = "0.4.1"
+links = "SoundTouch"
+rust-version = "1.70.0"
+
+[features]
+# Default: platform-appropriate choice
+# bundled = static linking of bundled sources
+# dynamic = dynamic linking against system lib
+default = []
+bundled = []
+# dynamic feature forces dynamic linking on all platforms
+dynamic = []
+
+[build-dependencies]
+cc = { version = "1.0", features = ["parallel"] }
+bindgen = "0.71"
+
+[dev-dependencies]
+hound = "3.5"
+num-traits = "0.2.19"

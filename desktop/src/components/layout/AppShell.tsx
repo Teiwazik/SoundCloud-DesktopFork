@@ -7,6 +7,7 @@ import { isAppBackgrounded } from '../../lib/app-visibility';
 import { getWallpaperUrl } from '../../lib/cache';
 import { art } from '../../lib/formatters';
 import { useIsMobile } from '../../lib/hooks/useIsMobile';
+import { toggleWindowFullscreen } from '../../lib/window';
 import { useArtworkStore, useFullscreenPanelStore, useLyricsStore } from '../../stores/lyrics';
 import { usePlayerStore } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
@@ -42,6 +43,7 @@ const keybindings: Keybinding[] = [
   { key: 'q', label: 'kb.queue', group: 'panels', display: 'Q' },
   { key: 'l', label: 'kb.lyrics', group: 'panels', display: 'L' },
   { key: '[', label: 'kb.sidebar', group: 'panels', display: '[' },
+  { key: 'F11', label: 'kb.fullscreen', group: 'panels', display: 'F11' },
   { key: 'Escape', label: 'kb.close', group: 'panels', display: 'Esc' },
   { key: 'Ctrl+/', label: 'kb.showBindings', group: 'panels', display: isMac() ? '⌘ /' : 'Ctrl /' },
 ];
@@ -263,6 +265,13 @@ export const AppShell = React.memo(() => {
         return;
       }
 
+      // F11 — toggle window fullscreen (always)
+      if (code === 'F11' && !e.repeat) {
+        e.preventDefault();
+        void toggleWindowFullscreen();
+        return;
+      }
+
       // / — focus search (not in input)
       if ((e.key === '/' || code === 'Slash') && !inInput) {
         e.preventDefault();
@@ -330,8 +339,7 @@ export const AppShell = React.memo(() => {
             useLyricsStore.getState().close();
           } else if (useArtworkStore.getState().open) {
             useArtworkStore.getState().setOpen(false);
-          }
-          else if (queueOpen) setQueueOpen(false);
+          } else if (queueOpen) setQueueOpen(false);
           break;
       }
     };
@@ -347,7 +355,7 @@ export const AppShell = React.memo(() => {
       <CustomBackground />
       <AmbientGlow />
       <Titlebar />
-      <div 
+      <div
         className={`flex flex-1 min-h-0 relative z-0 ${isMobile ? 'mb-[136px]' : 'mb-[96px]'}`}
         style={{ isolation: 'isolate', display: isFullscreen ? 'none' : undefined }}
       >

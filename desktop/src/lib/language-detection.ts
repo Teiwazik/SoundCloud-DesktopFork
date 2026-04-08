@@ -232,15 +232,25 @@ export function calculateLanguageDistribution(tracks: TrackLanguageProfile[]): L
 export function filterByLanguage<T extends { id: number }>(
   tracks: T[],
   languageProfiles: Map<number, TrackLanguageProfile>,
-  preferredLanguage: string,
+  preferredLanguage: string | string[],
 ): T[] {
-  if (preferredLanguage === 'all') {
+  const preferredLanguages = Array.isArray(preferredLanguage)
+    ? preferredLanguage
+        .map((lang) => lang.trim().toLowerCase())
+        .filter((lang) => lang && lang !== 'all')
+    : preferredLanguage === 'all'
+      ? []
+      : [preferredLanguage.trim().toLowerCase()].filter(Boolean);
+
+  if (preferredLanguages.length === 0) {
     return tracks;
   }
+
+  const preferredLanguageSet = new Set(preferredLanguages);
 
   return tracks.filter((track) => {
     const profile = languageProfiles.get(track.id);
     if (!profile) return false;
-    return profile.primaryLanguage === preferredLanguage;
+    return preferredLanguageSet.has(profile.primaryLanguage);
   });
 }
