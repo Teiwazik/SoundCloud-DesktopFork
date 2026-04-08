@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 const SOUNDTOUCH_DIR: &str = "soundtouch-2_3_2";
 
 #[allow(dead_code)] // Used conditionally based on target platform
@@ -60,8 +60,40 @@ fn build() {
 fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let out = out_dir.join("bindings.rs");
-    let pregenerated = PathBuf::from("src").join("bindings_pregenerated.rs");
-    fs::copy(&pregenerated, &out).expect("Couldn't write pregenerated bindings!");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+
+    // The pregenerated bindings were produced for GNU/Itanium C++ mangling.
+    // MSVC needs target-specific bindgen output or the linker won't resolve
+    // SoundTouch's C++ symbols.
+    if target_os == "windows" && target_env == "msvc" {
+        let header = PathBuf::from("wrapper.hpp");
+        let bindings = bindgen::Builder::default()
+            .header(header.display().to_string())
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+            .generate_comments(true)
+            .layout_tests(false)
+            .constified_enum_module("*")
+            .allowlist_type("soundtouch::.*")
+            .allowlist_function("soundtouch_.*")
+            .opaque_type("std::.*")
+            .manually_drop_union(".*")
+            .default_non_copy_union_style(bindgen::NonCopyUnionStyle::ManuallyDrop)
+            .use_core()
+            .enable_cxx_namespaces()
+            .trust_clang_mangling(true)
+            .clang_arg("-x")
+            .clang_arg("c++")
+            .generate()
+            .expect("Unable to generate SoundTouch bindings");
+
+        bindings
+            .write_to_file(&out)
+            .expect("Couldn't write bindings!");
+    } else {
+        let pregenerated = PathBuf::from("src").join("bindings_pregenerated.rs");
+        fs::copy(&pregenerated, &out).expect("Couldn't write pregenerated bindings!");
+    }
 
     // Skip C++ compilation on docs.rs (bindings are enough for documentation)
     if std::env::var("DOCS_RS").map(|v| v == "1").unwrap_or(false) {
