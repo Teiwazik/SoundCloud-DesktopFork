@@ -45,7 +45,7 @@ jobs:
 
       - name: Build portable executable
         working-directory: desktop
-        run: pnpm tauri build --bundles none
+        run: pnpm tauri build --no-bundle
 
       - name: Prepare portable package
         shell: bash
