@@ -1,4 +1,4 @@
-name: Windows EXE Manual
+name: Windows Installer Manual
 
 on:
   push:
@@ -10,11 +10,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-exe-manual-${{ github.ref }}
+  group: windows-installer-manual-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  windows-exe:
+  windows-installer:
     runs-on: windows-latest
 
     steps:
@@ -43,30 +43,13 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
-      - name: Build portable executable
+      - name: Build NSIS installer
         working-directory: desktop
-        run: pnpm tauri build --no-bundle
+        run: pnpm tauri build --bundles nsis
 
-      - name: Prepare portable package
-        shell: bash
-        working-directory: desktop
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./package.json').version")
-          OUT_DIR="portable-win-x64"
-          ARTIFACT_DIR="artifacts"
-          mkdir -p "$OUT_DIR" "$ARTIFACT_DIR"
-
-          cp "src-tauri/target/release/soundcloud-desktop.exe" "$OUT_DIR/"
-          if [ -f "src-tauri/target/release/WebView2Loader.dll" ]; then
-            cp "src-tauri/target/release/WebView2Loader.dll" "$OUT_DIR/"
-          fi
-
-          powershell -NoLogo -NoProfile -Command "Compress-Archive -Path '$OUT_DIR/*' -DestinationPath '$ARTIFACT_DIR/soundcloud-desktop_${VERSION}_x64-portable.zip' -Force"
-
-      - name: Upload portable package
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: windows-exe-portable
+          name: windows-installer
           retention-days: 7
-          path: desktop/artifacts/soundcloud-desktop_*_x64-portable.zip
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
