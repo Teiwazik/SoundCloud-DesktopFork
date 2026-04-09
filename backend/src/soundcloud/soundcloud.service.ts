@@ -14,6 +14,16 @@ export interface OAuthCredentials {
 
 const API_BASE = 'https://api.soundcloud.com';
 const AUTH_BASE = 'https://secure.soundcloud.com';
+const STREAM_PROXY_MAX_RETRIES = 3;
+const STREAM_PROXY_RETRY_DELAYS_MS = [300, 800, 2000];
+
+function isRetryableStreamStatus(status: number | null | undefined): boolean {
+  return typeof status === 'number' && (status === 429 || (status >= 500 && status <= 599));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 @Injectable()
 export class SoundcloudService {
@@ -216,15 +226,35 @@ export class SoundcloudService {
     if (range) extra.Range = range;
 
     const { url, headers } = this.proxyWith(this.apiProxyUrl, streamUrl, extra);
-    const { data, headers: resHeaders } = await firstValueFrom(
-      this.httpService.get(url, { headers, responseType: 'stream', maxRedirects: 5 }),
-    );
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= STREAM_PROXY_MAX_RETRIES; attempt++) {
+      try {
+        const { data, headers: resHeaders } = await firstValueFrom(
+          this.httpService.get(url, { headers, responseType: 'stream', maxRedirects: 5 }),
+        );
 
-    const responseHeaders: Record<string, string> = {};
-    for (const key of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
-      if (resHeaders[key]) responseHeaders[key] = String(resHeaders[key]);
+        const responseHeaders: Record<string, string> = {};
+        for (const key of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+          if (resHeaders[key]) responseHeaders[key] = String(resHeaders[key]);
+        }
+
+        return { stream: data as Readable, headers: responseHeaders };
+      } catch (error: unknown) {
+        lastError = error;
+        const status =
+          (error as { response?: { status?: unknown }; status?: unknown })?.response?.status ??
+          (error as { response?: { status?: unknown }; status?: unknown })?.status;
+
+        if (!isRetryableStreamStatus(typeof status === 'number' ? status : null)) {
+          throw error;
+        }
+
+        if (attempt < STREAM_PROXY_MAX_RETRIES) {
+          await sleep(STREAM_PROXY_RETRY_DELAYS_MS[attempt] ?? 2000);
+        }
+      }
     }
 
-    return { stream: data as Readable, headers: responseHeaders };
+    throw lastError ?? new Error(`Failed to proxy stream ${streamUrl}`);
   }
 }

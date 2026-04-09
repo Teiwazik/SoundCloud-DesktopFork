@@ -53,10 +53,19 @@ DATABASE_NAME=soundcloud_desktop
 PORT=3000
 ```
 
+Для локального запуска без внешнего PostgreSQL можно вместо этого включить встроенный dev-режим:
+
+```env
+DATABASE_DRIVER=pg-mem
+```
+
+В этом режиме backend поднимает in-memory Postgres-эмуляцию только для локальной разработки и проверки API.
+
 ### Дополнительные переменные (опционально)
 
 | Переменная | Описание |
 |---|---|
+| `DATABASE_DRIVER` | `postgres` по умолчанию, либо `pg-mem` для локального dev без внешней БД |
 | `SC_PROXY_URL` | Прокси URL для API-запросов к SoundCloud |
 | `SC_STREAM_PROXY_URL` | Отдельный прокси URL для stream/HLS-запросов |
 | `SC_COOKIES` | Cookies с `soundcloud.com` для fallback стриминга GO+/HQ |

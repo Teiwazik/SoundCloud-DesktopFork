@@ -10,6 +10,7 @@ import { setServerPorts } from './lib/constants';
 import { isTauriRuntime } from './lib/runtime';
 import './lib/audio';
 import './index.css';
+import { getEffectivePitchSemitones, usePlayerStore } from './stores/player';
 import { useSettingsStore } from './stores/settings';
 
 useSettingsStore.persist.onFinishHydration((state) => {
@@ -25,6 +26,26 @@ useSettingsStore.persist.onFinishHydration((state) => {
   }).catch(console.error);
 });
 
+function syncHydratedPlayerAudioState(state = usePlayerStore.getState()) {
+  if (!isTauriRuntime()) return;
+
+  invoke('audio_set_playback_rate', { playbackRate: state.playbackRate }).catch(console.error);
+  invoke('audio_set_pitch', {
+    pitchSemitones: getEffectivePitchSemitones(
+      state.playbackRate,
+      state.pitchControlMode,
+      state.pitchSemitones,
+    ),
+  }).catch(console.error);
+}
+
+if (usePlayerStore.persist.hasHydrated()) {
+  syncHydratedPlayerAudioState();
+}
+
+usePlayerStore.persist.onFinishHydration((state) => {
+  syncHydratedPlayerAudioState(state);
+});
 
 if (import.meta.env.DEV && import.meta.env.VITE_REACT_SCAN === '1') {
   const script = document.createElement('script');
@@ -208,7 +229,9 @@ async function bootstrap() {
       }
     } else {
       console.warn('[Bootstrap] Browser mode detected (without Tauri runtime).');
-      console.warn('[Bootstrap] For full app behavior run `pnpm dev:mcp` and use the Tauri window.');
+      console.warn(
+        '[Bootstrap] For full app behavior run `pnpm dev:mcp` and use the Tauri window.',
+      );
     }
 
     setServerPorts(staticPort, proxyPort);

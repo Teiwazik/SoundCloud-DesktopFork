@@ -1,7 +1,7 @@
+use base64::{engine::general_purpose, Engine as _};
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use base64::{Engine as _, engine::general_purpose};
-use sha2::{Sha256, Digest};
 use tauri::{AppHandle, Emitter, Manager};
 
 // ── PKCE helpers ──────────────────────────────────────────────────
@@ -34,7 +34,9 @@ pub struct YtMusicState {
 
 impl YtMusicState {
     pub fn new() -> Self {
-        Self { access_token: Mutex::new(None) }
+        Self {
+            access_token: Mutex::new(None),
+        }
     }
 }
 
@@ -144,7 +146,11 @@ pub async fn ytmusic_auth_start(
             let query = path.split('?').nth(1)?;
             query.split('&').find_map(|kv| {
                 let mut parts = kv.splitn(2, '=');
-                if parts.next()? == "code" { parts.next().map(|v| v.to_string()) } else { None }
+                if parts.next()? == "code" {
+                    parts.next().map(|v| v.to_string())
+                } else {
+                    None
+                }
             })
         })
         .ok_or("No code in callback")?;
@@ -179,8 +185,13 @@ pub async fn ytmusic_auth_start(
     }
 
     let raw = token_resp.text().await.map_err(|e| e.to_string())?;
-    let token: GoogleTokenResponse = serde_json::from_str(&raw)
-        .map_err(|e| format!("Token parse error: {} — body: {}", e, &raw[..raw.len().min(300)]))?;
+    let token: GoogleTokenResponse = serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "Token parse error: {} — body: {}",
+            e,
+            &raw[..raw.len().min(300)]
+        )
+    })?;
 
     {
         let state = app.state::<YtMusicState>();
@@ -193,7 +204,11 @@ pub async fn ytmusic_auth_start(
 
 #[tauri::command]
 pub fn ytmusic_is_authed(app: AppHandle) -> bool {
-    app.state::<YtMusicState>().access_token.lock().unwrap().is_some()
+    app.state::<YtMusicState>()
+        .access_token
+        .lock()
+        .unwrap()
+        .is_some()
 }
 
 #[tauri::command]
@@ -228,7 +243,9 @@ pub async fn ytmusic_import_start(
     let mut total_known: Option<usize> = None;
 
     loop {
-        if CANCEL_FLAG.load(Ordering::Relaxed) { break; }
+        if CANCEL_FLAG.load(Ordering::Relaxed) {
+            break;
+        }
 
         let mut url = format!(
             "https://www.googleapis.com/youtube/v3/videos?\
@@ -255,8 +272,13 @@ pub async fn ytmusic_import_start(
         }
 
         let raw = resp.text().await.map_err(|e| e.to_string())?;
-        let page: YtRatingListResponse = serde_json::from_str(&raw)
-            .map_err(|e| format!("YouTube API parse error: {} — body: {}", e, &raw[..raw.len().min(300)]))?;
+        let page: YtRatingListResponse = serde_json::from_str(&raw).map_err(|e| {
+            format!(
+                "YouTube API parse error: {} — body: {}",
+                e,
+                &raw[..raw.len().min(300)]
+            )
+        })?;
 
         if total_known.is_none() {
             if let Some(info) = &page.page_info {
@@ -288,16 +310,22 @@ pub async fn ytmusic_import_start(
     let mut found_urns: Vec<String> = Vec::new();
 
     for (i, (title, artist)) in all_tracks.iter().enumerate() {
-        if CANCEL_FLAG.load(Ordering::Relaxed) { break; }
+        if CANCEL_FLAG.load(Ordering::Relaxed) {
+            break;
+        }
 
         let current_track = format!("{} - {}", artist, title);
-        app.emit("ytmusic_import:progress", YtMusicImportProgress {
-            total,
-            current: i + 1,
-            found,
-            not_found,
-            current_track: current_track.clone(),
-        }).ok();
+        app.emit(
+            "ytmusic_import:progress",
+            YtMusicImportProgress {
+                total,
+                current: i + 1,
+                found,
+                not_found,
+                current_track: current_track.clone(),
+            },
+        )
+        .ok();
 
         let query = format!("{} {}", artist, title);
         let search_url = format!(
@@ -330,13 +358,17 @@ pub async fn ytmusic_import_start(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    app.emit("ytmusic_import:progress", YtMusicImportProgress {
-        total,
-        current: total,
-        found,
-        not_found,
-        current_track: String::new(),
-    }).ok();
+    app.emit(
+        "ytmusic_import:progress",
+        YtMusicImportProgress {
+            total,
+            current: total,
+            found,
+            not_found,
+            current_track: String::new(),
+        },
+    )
+    .ok();
 
     Ok(found_urns)
 }

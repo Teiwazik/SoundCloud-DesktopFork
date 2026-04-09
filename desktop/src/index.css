@@ -30,23 +30,36 @@
   --theme-app-background-size: 100% 100%, 100% 100%, 100% 100%;
   --theme-gradient-speed: 16s;
   --theme-accent-gradient: linear-gradient(135deg, var(--color-accent), var(--color-accent-hover));
-  --theme-accent-gradient-hover: linear-gradient(135deg, var(--color-accent-hover), var(--color-accent));
-  --theme-accent-gradient-soft: linear-gradient(135deg, rgba(255, 85, 0, 0.22), rgba(255, 85, 0, 0.1));
+  --theme-accent-gradient-hover: linear-gradient(
+    135deg,
+    var(--color-accent-hover),
+    var(--color-accent)
+  );
+  --theme-accent-gradient-soft: linear-gradient(
+    135deg,
+    rgba(255, 85, 0, 0.22),
+    rgba(255, 85, 0, 0.1)
+  );
   --theme-accent-gradient-size: 100% 100%;
   --theme-accent-shadow: 0 0 16px var(--color-accent-glow);
   --theme-accent-shadow-strong: 0 0 26px var(--color-accent-glow);
   --theme-accent-soft-border: rgba(255, 85, 0, 0.22);
   --theme-glass-blur: 40px;
+  --theme-glass-saturate: 1.8;
+  --theme-glass-featured-saturate: 2;
   --theme-glass-bg: rgba(255, 255, 255, 0.025);
   --theme-glass-flat-bg: rgba(255, 255, 255, 0.025);
   --theme-glass-hover: rgba(255, 255, 255, 0.05);
   --theme-glass-featured-bg: rgba(255, 255, 255, 0.02);
   --theme-glass-border: rgba(255, 255, 255, 0.05);
   --theme-glass-border-hi: rgba(255, 255, 255, 0.1);
-  --theme-glass-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-    0 8px 40px rgba(0, 0, 0, 0.3);
-  --theme-greeting-gradient: linear-gradient(to right, white, rgba(255, 255, 255, 0.8), var(--color-accent));
+  --theme-glass-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 8px 40px rgba(0, 0, 0, 0.3);
+  --theme-greeting-gradient: linear-gradient(
+    to right,
+    white,
+    rgba(255, 255, 255, 0.8),
+    var(--color-accent)
+  );
   --theme-heading-shadow: none;
 }
 
@@ -66,7 +79,10 @@ body,
   background-color: var(--bg-primary);
   background-image: var(--theme-app-background);
   background-size: var(--theme-app-background-size);
-  background-position: 0% 50%, 0% 100%, 85% 12%;
+  background-position:
+    0% 50%,
+    0% 100%,
+    85% 12%;
   background-repeat: no-repeat;
   color: var(--color-text-primary);
   font-family: var(--font-sans);
@@ -79,7 +95,10 @@ body,
   background-color: var(--bg-primary);
   background-image: var(--theme-app-background);
   background-size: var(--theme-app-background-size);
-  background-position: 0% 50%, 0% 100%, 85% 12%;
+  background-position:
+    0% 50%,
+    0% 100%,
+    85% 12%;
   background-repeat: no-repeat;
   overflow: hidden;
   transition:
@@ -90,35 +109,62 @@ body,
 
 @keyframes themeGradientFlow {
   0% {
-    background-position: 0% 28%, 0% 100%, 84% 12%;
+    background-position:
+      0% 28%,
+      0% 100%,
+      84% 12%;
   }
   50% {
-    background-position: 100% 72%, 100% 0%, 88% 16%;
+    background-position:
+      100% 72%,
+      100% 0%,
+      88% 16%;
   }
   100% {
-    background-position: 0% 28%, 0% 100%, 84% 12%;
+    background-position:
+      0% 28%,
+      0% 100%,
+      84% 12%;
   }
 }
 
 @keyframes themeGradientPulse {
   0%,
   100% {
-    background-size: 180% 180%, 160% 160%, 140% 140%;
-    background-position: 50% 50%, 18% 84%, 85% 12%;
+    background-size:
+      180% 180%,
+      160% 160%,
+      140% 140%;
+    background-position:
+      50% 50%,
+      18% 84%,
+      85% 12%;
   }
   50% {
-    background-size: 205% 205%, 180% 180%, 155% 155%;
-    background-position: 46% 54%, 22% 78%, 82% 18%;
+    background-size:
+      205% 205%,
+      180% 180%,
+      155% 155%;
+    background-position:
+      46% 54%,
+      22% 78%,
+      82% 18%;
   }
 }
 
 @keyframes themeGradientBreathe {
   0%,
   100% {
-    background-position: 0% 50%, 18% 84%, 85% 12%;
+    background-position:
+      0% 50%,
+      18% 84%,
+      85% 12%;
   }
   50% {
-    background-position: 100% 50%, 12% 90%, 80% 18%;
+    background-position:
+      100% 50%,
+      12% 90%,
+      80% 18%;
   }
 }
 
@@ -137,17 +183,20 @@ body,
   will-change: background-position;
 }
 
-:root[data-theme-gradient-animated="true"][data-theme-gradient-animation="flow"] .theme-accent-animated {
+:root[data-theme-gradient-animated="true"][data-theme-gradient-animation="flow"]
+  .theme-accent-animated {
   animation: themeGradientFlow var(--theme-gradient-speed) ease-in-out infinite;
   will-change: background-position;
 }
 
-:root[data-theme-gradient-animated="true"][data-theme-gradient-animation="pulse"] .theme-accent-animated {
+:root[data-theme-gradient-animated="true"][data-theme-gradient-animation="pulse"]
+  .theme-accent-animated {
   animation: themeGradientPulse var(--theme-gradient-speed) ease-in-out infinite;
   will-change: background-position, background-size;
 }
 
-:root[data-theme-gradient-animated="true"][data-theme-gradient-animation="breathe"] .theme-accent-animated {
+:root[data-theme-gradient-animated="true"][data-theme-gradient-animation="breathe"]
+  .theme-accent-animated {
   animation: themeGradientBreathe var(--theme-gradient-speed) ease-in-out infinite;
   will-change: background-position;
 }
@@ -183,7 +232,7 @@ body,
 /* ── Glass ──────────────────────────────────────────────────── */
 .glass {
   background: var(--theme-glass-bg);
-  backdrop-filter: blur(var(--theme-glass-blur)) saturate(1.8);
+  backdrop-filter: blur(var(--theme-glass-blur)) saturate(var(--theme-glass-saturate));
   border: 1px solid var(--theme-glass-border);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
@@ -235,6 +284,22 @@ body,
   background: var(--theme-accent-gradient-soft);
   border-color: var(--theme-accent-soft-border);
   box-shadow: var(--theme-accent-shadow);
+}
+
+.theme-accent-chip {
+  color: rgba(255, 255, 255, 0.92);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.34), rgba(0, 0, 0, 0.24)), var(--theme-accent-gradient);
+  background-size:
+    100% 100%,
+    100% 100%,
+    var(--theme-accent-gradient-size);
+  background-repeat: no-repeat;
+  border-color: var(--theme-accent-soft-border);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.035) inset,
+    var(--theme-accent-shadow);
 }
 
 :root[data-theme-preset="custom"] .bg-accent,
@@ -373,7 +438,50 @@ body,
 }
 
 .note-gradient-text {
-  opacity: 0.46;
+  opacity: 1;
+  color: rgba(255, 255, 255, 0.24) !important;
+  -webkit-text-fill-color: currentColor;
+  background-image: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  filter: none;
+  background-position: 0 50%;
+  background-size: 144px 100%;
+  background-repeat: repeat-x;
+  transition:
+    color 0.3s var(--ease-apple),
+    opacity 0.3s var(--ease-apple),
+    filter 0.3s var(--ease-apple);
+  will-change: background-position, color, filter, opacity;
+  animation: noteGradientFlow var(--note-gradient-duration, 3.2s) linear infinite both;
+  animation-delay: var(--note-gradient-delay, 0s);
+  animation-play-state: paused;
+}
+
+.lyric-line[data-state="next-near"] .note-gradient-text {
+  color: rgba(255, 255, 255, 0.34) !important;
+}
+
+.lyric-line[data-state="next"] .note-gradient-text {
+  color: rgba(255, 255, 255, 0.24) !important;
+}
+
+.lyric-line[data-state="past-near"] .note-gradient-text {
+  color: rgba(255, 255, 255, 0.96) !important;
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.12));
+}
+
+.lyric-line[data-state="past"] .note-gradient-text {
+  color: rgba(255, 255, 255, 0.92) !important;
+  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.08));
+}
+
+.lyric-line[data-state="active"] .note-gradient-text {
+  opacity: 1;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
   background-image: linear-gradient(
     90deg,
     rgba(255, 255, 255, 0.06) 0px,
@@ -389,33 +497,30 @@ body,
     rgba(255, 255, 255, 0.12) 136px,
     rgba(255, 255, 255, 0.06) 144px
   );
-  -webkit-background-clip: text;
-  background-clip: text;
-  filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.14));
-  background-position: 0 50%;
   background-size: 144px 100%;
   background-repeat: repeat-x;
-  transition: opacity 0.3s var(--ease-apple), filter 0.3s var(--ease-apple);
-  will-change: background-position, filter, opacity;
-  animation: noteGradientFlow var(--note-gradient-duration, 3.2s) linear infinite both;
-  animation-delay: var(--note-gradient-delay, 0s);
-  animation-play-state: paused;
-}
-
-.lyric-line[data-state='active'] .note-gradient-text {
-  opacity: 1;
   filter: drop-shadow(0 0 22px rgba(255, 255, 255, 0.48));
   animation-play-state: running;
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes zoomIn {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .animate-fade-in {
@@ -492,7 +597,8 @@ body,
 /* ── Featured card glass ──────────────────────────────────── */
 .glass-featured {
   background: var(--theme-glass-featured-bg);
-  backdrop-filter: blur(calc(var(--theme-glass-blur) * 1.5)) saturate(2);
+  backdrop-filter: blur(calc(var(--theme-glass-blur) * 1.5))
+    saturate(var(--theme-glass-featured-saturate));
   border: 1px solid var(--theme-glass-border-hi);
   box-shadow: var(--theme-glass-shadow);
 }

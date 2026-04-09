@@ -3,6 +3,42 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { tauriStorage } from '../lib/tauri-storage';
 import { useDislikesStore } from './dislikes';
 
+export const PLAYBACK_RATE_MIN = 0.5;
+export const PLAYBACK_RATE_MAX = 2.0;
+export const PLAYBACK_RATE_STEP = 0.05;
+export const PITCH_SEMITONES_MIN = -12;
+export const PITCH_SEMITONES_MAX = 12;
+export const PITCH_SEMITONES_STEP = 0.5;
+export type PitchControlMode = 'auto' | 'manual';
+
+export function clampPlaybackRate(value: number): number {
+  const clamped = Math.max(PLAYBACK_RATE_MIN, Math.min(PLAYBACK_RATE_MAX, value));
+  return Math.round(clamped * 100) / 100;
+}
+
+export function clampPitchSemitones(value: number): number {
+  const clamped = Math.max(PITCH_SEMITONES_MIN, Math.min(PITCH_SEMITONES_MAX, value));
+  const snapped = Math.round(clamped / PITCH_SEMITONES_STEP) * PITCH_SEMITONES_STEP;
+  return Math.round(snapped * 10) / 10;
+}
+
+export function getAutoPitchSemitones(playbackRate: number): number {
+  const safeRate = clampPlaybackRate(playbackRate);
+  const semitones = 12 * Math.log2(safeRate);
+  const clamped = Math.max(PITCH_SEMITONES_MIN, Math.min(PITCH_SEMITONES_MAX, semitones));
+  return Math.round(clamped * 10) / 10;
+}
+
+export function getEffectivePitchSemitones(
+  playbackRate: number,
+  pitchControlMode: PitchControlMode,
+  pitchSemitones: number,
+): number {
+  return pitchControlMode === 'auto'
+    ? getAutoPitchSemitones(playbackRate)
+    : clampPitchSemitones(pitchSemitones);
+}
+
 export interface Track {
   id: number;
   urn: string;
@@ -36,6 +72,100 @@ export interface Track {
 }
 
 type RepeatMode = 'off' | 'one' | 'all';
+type TrackPlaybackRateMap = Record<string, number>;
+type TrackPlaybackRateEnabledMap = Record<string, boolean>;
+
+type PlaybackRateControlState = {
+  currentTrack: Track | null;
+  playbackRate: number;
+  globalPlaybackRate: number;
+  trackPlaybackRatesByUrn: TrackPlaybackRateMap;
+  trackPlaybackRateEnabledByUrn: TrackPlaybackRateEnabledMap;
+};
+
+function sanitizeTrackPlaybackRates(value: unknown): TrackPlaybackRateMap {
+  if (!value || typeof value !== 'object') return {};
+
+  const next: TrackPlaybackRateMap = {};
+  for (const [urn, rate] of Object.entries(value as Record<string, unknown>)) {
+    if (!urn || typeof rate !== 'number' || !Number.isFinite(rate)) continue;
+    next[urn] = clampPlaybackRate(rate);
+  }
+
+  return next;
+}
+
+function sanitizeTrackPlaybackRateEnabledMap(value: unknown): TrackPlaybackRateEnabledMap {
+  if (!value || typeof value !== 'object') return {};
+
+  const next: TrackPlaybackRateEnabledMap = {};
+  for (const [urn, enabled] of Object.entries(value as Record<string, unknown>)) {
+    if (!urn || enabled !== true) continue;
+    next[urn] = true;
+  }
+
+  return next;
+}
+
+function removeTrackPlaybackRateKey<T extends Record<string, unknown>>(map: T, urn: string): T {
+  if (!(urn in map)) return map;
+  const next = { ...map };
+  delete next[urn];
+  return next;
+}
+
+export function isTrackPlaybackRateEnabledForTrack(
+  track: Track | null | undefined,
+  trackPlaybackRateEnabledByUrn: TrackPlaybackRateEnabledMap,
+): boolean {
+  return Boolean(track?.urn && trackPlaybackRateEnabledByUrn[track.urn]);
+}
+
+function resolvePlaybackRateForTrack(
+  track: Track | null | undefined,
+  globalPlaybackRate: number,
+  trackPlaybackRateEnabledByUrn: TrackPlaybackRateEnabledMap,
+  trackPlaybackRatesByUrn: TrackPlaybackRateMap,
+): number {
+  const fallbackRate = clampPlaybackRate(globalPlaybackRate);
+  if (!track?.urn || !trackPlaybackRateEnabledByUrn[track.urn]) {
+    return fallbackRate;
+  }
+
+  return clampPlaybackRate(trackPlaybackRatesByUrn[track.urn] ?? fallbackRate);
+}
+
+function buildPlaybackRateUpdate(
+  state: PlaybackRateControlState,
+  nextRate: number,
+): {
+  playbackRate: number;
+  globalPlaybackRate?: number;
+  trackPlaybackRatesByUrn?: TrackPlaybackRateMap;
+} {
+  const playbackRate = clampPlaybackRate(nextRate);
+  const urn = state.currentTrack?.urn;
+
+  if (urn && state.trackPlaybackRateEnabledByUrn[urn]) {
+    const trackPlaybackRatesByUrn =
+      state.trackPlaybackRatesByUrn[urn] === playbackRate
+        ? state.trackPlaybackRatesByUrn
+        : {
+            ...state.trackPlaybackRatesByUrn,
+            [urn]: playbackRate,
+          };
+
+    return {
+      playbackRate,
+      trackPlaybackRatesByUrn,
+    };
+  }
+
+  return {
+    playbackRate,
+    globalPlaybackRate: playbackRate,
+  };
+}
 
 function shuffleArray<T>(arr: T[]): void {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -87,6 +217,12 @@ interface PlayerState {
   isPlaying: boolean;
   volume: number;
   volumeBeforeMute: number;
+  playbackRate: number;
+  globalPlaybackRate: number;
+  trackPlaybackRatesByUrn: TrackPlaybackRateMap;
+  trackPlaybackRateEnabledByUrn: TrackPlaybackRateEnabledMap;
+  pitchSemitones: number;
+  pitchControlMode: PitchControlMode;
   shuffle: boolean;
   repeat: RepeatMode;
 
@@ -98,6 +234,12 @@ interface PlayerState {
   next: () => void;
   prev: () => void;
   setVolume: (v: number) => void;
+  setPlaybackRate: (rate: number) => void;
+  resetPlaybackRate: () => void;
+  setCurrentTrackPlaybackRateEnabled: (enabled: boolean) => void;
+  setPitchSemitones: (value: number) => void;
+  resetPitchSemitones: () => void;
+  setPitchControlMode: (mode: PitchControlMode) => void;
   setQueue: (queue: Track[]) => void;
   addToQueue: (tracks: Track[]) => void;
   addToQueueNext: (tracks: Track[]) => void;
@@ -123,13 +265,31 @@ export const usePlayerStore = create<PlayerState>()(
       isPlaying: false,
       volume: 50,
       volumeBeforeMute: 50,
+      playbackRate: 1,
+      globalPlaybackRate: 1,
+      trackPlaybackRatesByUrn: {},
+      trackPlaybackRateEnabledByUrn: {},
+      pitchSemitones: 0,
+      pitchControlMode: 'manual',
       shuffle: false,
       repeat: 'off',
 
       play: (track, queue, source = 'manual') => {
+        const {
+          shuffle,
+          globalPlaybackRate,
+          trackPlaybackRatesByUrn,
+          trackPlaybackRateEnabledByUrn,
+        } = get();
+        const playbackRate = resolvePlaybackRateForTrack(
+          track,
+          globalPlaybackRate,
+          trackPlaybackRateEnabledByUrn,
+          trackPlaybackRatesByUrn,
+        );
+
         if (queue) {
           const uniqueQueue = dedupeTracks(queue);
-          const { shuffle } = get();
           const idx = uniqueQueue.findIndex((t) => t.urn === track.urn);
           const realIdx = idx >= 0 ? idx : 0;
 
@@ -143,6 +303,7 @@ export const usePlayerStore = create<PlayerState>()(
               queueIndex: 0,
               queueSource: source,
               isPlaying: true,
+              playbackRate,
               originalQueue: original,
             });
           } else {
@@ -152,6 +313,7 @@ export const usePlayerStore = create<PlayerState>()(
               queueIndex: realIdx,
               queueSource: source,
               isPlaying: true,
+              playbackRate,
               originalQueue: null,
             });
           }
@@ -163,17 +325,30 @@ export const usePlayerStore = create<PlayerState>()(
             queueIndex: currentQueue.length,
             queueSource: source,
             isPlaying: true,
+            playbackRate,
           });
         }
       },
 
       playFromQueue: (index) => {
-        const { queue } = get();
+        const {
+          queue,
+          globalPlaybackRate,
+          trackPlaybackRatesByUrn,
+          trackPlaybackRateEnabledByUrn,
+        } = get();
         if (index < 0 || index >= queue.length) return;
+        const nextTrack = queue[index];
         set({
-          currentTrack: queue[index],
+          currentTrack: nextTrack,
           queueIndex: index,
           isPlaying: true,
+          playbackRate: resolvePlaybackRateForTrack(
+            nextTrack,
+            globalPlaybackRate,
+            trackPlaybackRateEnabledByUrn,
+            trackPlaybackRatesByUrn,
+          ),
         });
       },
 
@@ -186,7 +361,14 @@ export const usePlayerStore = create<PlayerState>()(
       },
 
       next: () => {
-        const { queue, queueIndex, repeat } = get();
+        const {
+          queue,
+          queueIndex,
+          repeat,
+          globalPlaybackRate,
+          trackPlaybackRatesByUrn,
+          trackPlaybackRateEnabledByUrn,
+        } = get();
         if (queue.length === 0) return;
 
         let nextIdx = queueIndex + 1;
@@ -215,15 +397,28 @@ export const usePlayerStore = create<PlayerState>()(
           return;
         }
 
+        const nextTrack = queue[nextIdx];
         set({
-          currentTrack: queue[nextIdx],
+          currentTrack: nextTrack,
           queueIndex: nextIdx,
           isPlaying: true,
+          playbackRate: resolvePlaybackRateForTrack(
+            nextTrack,
+            globalPlaybackRate,
+            trackPlaybackRateEnabledByUrn,
+            trackPlaybackRatesByUrn,
+          ),
         });
       },
 
       prev: () => {
-        const { queue, queueIndex } = get();
+        const {
+          queue,
+          queueIndex,
+          globalPlaybackRate,
+          trackPlaybackRatesByUrn,
+          trackPlaybackRateEnabledByUrn,
+        } = get();
         if (queue.length === 0) return;
 
         let prevIdx = queueIndex - 1;
@@ -240,11 +435,18 @@ export const usePlayerStore = create<PlayerState>()(
         }
 
         prevIdx = Math.max(0, prevIdx);
+        const prevTrack = queue[prevIdx];
 
         set({
-          currentTrack: queue[prevIdx],
+          currentTrack: prevTrack,
           queueIndex: prevIdx,
           isPlaying: true,
+          playbackRate: resolvePlaybackRateForTrack(
+            prevTrack,
+            globalPlaybackRate,
+            trackPlaybackRateEnabledByUrn,
+            trackPlaybackRatesByUrn,
+          ),
         });
       },
 
@@ -256,6 +458,48 @@ export const usePlayerStore = create<PlayerState>()(
           ...(clamped === 0 && prev > 0 ? { volumeBeforeMute: prev } : {}),
         });
       },
+
+      setPlaybackRate: (rate) => set((state) => buildPlaybackRateUpdate(state, rate)),
+      resetPlaybackRate: () => set((state) => buildPlaybackRateUpdate(state, 1)),
+      setCurrentTrackPlaybackRateEnabled: (enabled) =>
+        set((state) => {
+          const track = state.currentTrack;
+          if (!track?.urn) return {};
+
+          const urn = track.urn;
+          const currentlyEnabled = Boolean(state.trackPlaybackRateEnabledByUrn[urn]);
+          if (enabled === currentlyEnabled) return {};
+
+          if (enabled) {
+            const savedRate = clampPlaybackRate(
+              state.trackPlaybackRatesByUrn[urn] ?? state.playbackRate ?? state.globalPlaybackRate,
+            );
+
+            return {
+              playbackRate: savedRate,
+              trackPlaybackRatesByUrn: {
+                ...state.trackPlaybackRatesByUrn,
+                [urn]: savedRate,
+              },
+              trackPlaybackRateEnabledByUrn: {
+                ...state.trackPlaybackRateEnabledByUrn,
+                [urn]: true,
+              },
+            };
+          }
+
+          return {
+            playbackRate: 1,
+            globalPlaybackRate: 1,
+            trackPlaybackRateEnabledByUrn: removeTrackPlaybackRateKey(
+              state.trackPlaybackRateEnabledByUrn,
+              urn,
+            ),
+          };
+        }),
+      setPitchSemitones: (value) => set({ pitchSemitones: clampPitchSemitones(value) }),
+      resetPitchSemitones: () => set({ pitchSemitones: 0 }),
+      setPitchControlMode: (mode) => set({ pitchControlMode: mode }),
 
       setQueue: (queue) =>
         set((s) => {
@@ -273,7 +517,9 @@ export const usePlayerStore = create<PlayerState>()(
       addToQueue: (tracks) =>
         set((s) => {
           const queue = appendUniqueTracks(s.queue, tracks);
-          const originalQueue = s.originalQueue ? appendUniqueTracks(s.originalQueue, tracks) : null;
+          const originalQueue = s.originalQueue
+            ? appendUniqueTracks(s.originalQueue, tracks)
+            : null;
           return { queue, originalQueue };
         }),
 
@@ -283,9 +529,7 @@ export const usePlayerStore = create<PlayerState>()(
           const queue = insertUniqueTracks(s.queue, tracks, insertIndex);
           return {
             queue,
-            originalQueue: s.originalQueue
-              ? appendUniqueTracks(s.originalQueue, tracks)
-              : null,
+            originalQueue: s.originalQueue ? appendUniqueTracks(s.originalQueue, tracks) : null,
           };
         }),
 
@@ -321,7 +565,8 @@ export const usePlayerStore = create<PlayerState>()(
           return { queue, queueIndex };
         }),
 
-      clearQueue: () => set({ queue: [], queueIndex: -1, queueSource: 'manual', originalQueue: null }),
+      clearQueue: () =>
+        set({ queue: [], queueIndex: -1, queueSource: 'manual', originalQueue: null }),
 
       toggleShuffle: () => {
         const { shuffle, queue, queueIndex, currentTrack } = get();
@@ -376,16 +621,51 @@ export const usePlayerStore = create<PlayerState>()(
     {
       name: 'sc-player',
       storage: createJSONStorage(() => tauriStorage),
-      version: 3,
+      version: 7,
       migrate: (persistedState) => {
         const state = (
           persistedState && typeof persistedState === 'object' ? persistedState : {}
         ) as Partial<PlayerState>;
         return state;
       },
+      merge: (persistedState, currentState) => {
+        const state = (
+          persistedState && typeof persistedState === 'object' ? persistedState : {}
+        ) as Partial<PlayerState>;
+        const trackPlaybackRatesByUrn = sanitizeTrackPlaybackRates(state.trackPlaybackRatesByUrn);
+        const trackPlaybackRateEnabledByUrn = sanitizeTrackPlaybackRateEnabledMap(
+          state.trackPlaybackRateEnabledByUrn,
+        );
+        const globalPlaybackRate = clampPlaybackRate(
+          state.globalPlaybackRate ?? state.playbackRate ?? currentState.globalPlaybackRate,
+        );
+        const currentTrack = state.currentTrack ?? currentState.currentTrack;
+
+        return {
+          ...currentState,
+          ...state,
+          playbackRate: resolvePlaybackRateForTrack(
+            currentTrack,
+            globalPlaybackRate,
+            trackPlaybackRateEnabledByUrn,
+            trackPlaybackRatesByUrn,
+          ),
+          globalPlaybackRate,
+          trackPlaybackRatesByUrn,
+          trackPlaybackRateEnabledByUrn,
+          pitchSemitones: clampPitchSemitones(state.pitchSemitones ?? currentState.pitchSemitones),
+          pitchControlMode: state.pitchControlMode === 'auto' ? 'auto' : 'manual',
+        };
+      },
       partialize: (state) => ({
         volume: state.volume,
         volumeBeforeMute: state.volumeBeforeMute,
+        playbackRate: state.playbackRate,
+        globalPlaybackRate: state.globalPlaybackRate,
+        trackPlaybackRatesByUrn: state.trackPlaybackRatesByUrn,
+        trackPlaybackRateEnabledByUrn: state.trackPlaybackRateEnabledByUrn,
+        pitchSemitones: state.pitchSemitones,
+        pitchControlMode: state.pitchControlMode,
         currentTrack: state.currentTrack,
         queue: state.queue,
         originalQueue: state.originalQueue,
@@ -396,3 +676,17 @@ export const usePlayerStore = create<PlayerState>()(
     },
   ),
 );
+
+usePlayerStore.subscribe((state, prev) => {
+  if (state.currentTrack?.urn === prev.currentTrack?.urn) return;
+
+  const nextPlaybackRate = resolvePlaybackRateForTrack(
+    state.currentTrack,
+    state.globalPlaybackRate,
+    state.trackPlaybackRateEnabledByUrn,
+    state.trackPlaybackRatesByUrn,
+  );
+
+  if (Math.abs(state.playbackRate - nextPlaybackRate) < 0.001) return;
+  usePlayerStore.setState({ playbackRate: nextPlaybackRate });
+});

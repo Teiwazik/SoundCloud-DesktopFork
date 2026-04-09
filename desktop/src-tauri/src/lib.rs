@@ -69,7 +69,8 @@ pub fn run() {
         })
         .setup(move |app| {
             #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
 
             let cache_dir = app
                 .path()
@@ -102,11 +103,12 @@ pub fn run() {
 
             // Create main window dynamically
             #[allow(unused_mut)]
-            let mut win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("SoundCloud Desktop")
-                .inner_size(1200.0, 800.0)
-                .min_inner_size(800.0, 470.0)
-                .decorations(false);
+            let mut win_builder =
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("SoundCloud Desktop")
+                    .inner_size(1200.0, 800.0)
+                    .min_inner_size(800.0, 470.0)
+                    .decorations(false);
 
             #[cfg(target_os = "windows")]
             {
@@ -188,6 +190,8 @@ pub fn run() {
             audio_player::audio_stop,
             audio_player::audio_seek,
             audio_player::audio_set_volume,
+            audio_player::audio_set_playback_rate,
+            audio_player::audio_set_pitch,
             audio_player::audio_get_position,
             audio_player::audio_set_eq,
             audio_player::audio_set_normalization,

@@ -13,9 +13,11 @@ interface FullscreenPanelState {
   transitionDirection: TransitionDirection;
   openAnimation: FullscreenOpenAnimation;
   closeAnimation: FullscreenCloseAnimation;
+  lyricsSplitRatio: number;
   setMode: (mode: FullscreenPanelMode) => void;
   setTransitionDirection: (dir: TransitionDirection) => void;
   setOpenAnimation: (animation: FullscreenOpenAnimation) => void;
+  setLyricsSplitRatio: (ratio: number) => void;
   cancelCloseAnimation: () => void;
   beginClose: () => void;
   close: () => void;
@@ -40,9 +42,11 @@ export const useFullscreenPanelStore = create<FullscreenPanelState>()((set) => (
   transitionDirection: 'none',
   openAnimation: 'default',
   closeAnimation: 'none',
+  lyricsSplitRatio: 0.5,
   setMode: (mode) => set({ mode }),
   setTransitionDirection: (dir) => set({ transitionDirection: dir }),
   setOpenAnimation: (animation) => set({ openAnimation: animation }),
+  setLyricsSplitRatio: (ratio) => set({ lyricsSplitRatio: ratio }),
   cancelCloseAnimation: () => {
     if (fullscreenCloseTimer) {
       clearTimeout(fullscreenCloseTimer);

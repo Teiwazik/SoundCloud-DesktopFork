@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Track } from '../stores/player';
-import { usePlayerStore } from '../stores/player';
+import { clampPlaybackRate, getEffectivePitchSemitones, usePlayerStore } from '../stores/player';
 import { useSettingsStore } from '../stores/settings';
 import { useSoundWaveStore } from '../stores/soundwave';
 import { api, getSessionId, streamUrl } from './api';
@@ -24,6 +24,8 @@ let fallbackDuration = 0;
 let cachedTime = 0;
 let cachedDuration = 0;
 let loadGen = 0;
+let loadingTrackUrn: string | null = null;
+let loadingTrackGen = 0;
 let lastTickAt = 0;
 let isCrossfadingOut = false;
 let crossfadeInProgress = false;
@@ -35,7 +37,15 @@ let endedGuardUntil = 0;
 let deviceChangeCooldownUntil = 0;
 let seekTargetTime = -1;
 let seekPendingUntil = 0;
+let startupRecoveryGuardUntil = 0;
+let startupProgressSeen = false;
 const listeners = new Set<() => void>();
+
+const TRACK_STARTUP_GUARD_CACHE_MS = 4000;
+const TRACK_STARTUP_GUARD_NETWORK_MS = 12000;
+const TRACK_STARTUP_PROGRESS_EPSILON_SEC = 0.12;
+const SMOOTH_BACKTRACK_RESET_EPSILON_SEC = 0.05;
+const SEEK_TICK_LANDING_TOLERANCE_SEC = 0.45;
 
 function notify() {
   for (const l of listeners) l();
@@ -51,17 +61,28 @@ export function getCurrentTime(): number {
 }
 
 export function getSmoothCurrentTime(): number {
-  if (!usePlayerStore.getState().isPlaying || !hasTrack) {
+  const { isPlaying, playbackRate } = usePlayerStore.getState();
+  if (!isPlaying || !hasTrack) {
     lastSmoothTime = cachedTime;
     return cachedTime;
   }
   const now = Date.now();
   if (lastTickAt === 0 || now < lastTickAt) return cachedTime;
+  if (seekPendingUntil > now && seekTargetTime >= 0) {
+    lastSmoothTime = cachedTime;
+    return cachedTime;
+  }
+  if (cachedTime + SMOOTH_BACKTRACK_RESET_EPSILON_SEC < lastSmoothTime) {
+    lastSmoothTime = cachedTime;
+    return cachedTime;
+  }
   const elapsed = (now - lastTickAt) / 1000;
-  const raw = Math.min(cachedTime + elapsed, cachedTime + 1.0);
+  const speed = clampPlaybackRate(playbackRate);
+  const raw = Math.min(cachedTime + elapsed * speed, cachedTime + Math.max(1.0, speed));
 
   if (raw + 0.08 < lastSmoothTime && lastSmoothTime - raw < 1.25) {
-    return lastSmoothTime;
+    lastSmoothTime = raw;
+    return raw;
   }
 
   lastSmoothTime = raw;
@@ -70,6 +91,21 @@ export function getSmoothCurrentTime(): number {
 
 export function getDuration(): number {
   return cachedDuration;
+}
+
+function beginStartupRecoveryGuard(loadedFromCache: boolean) {
+  startupProgressSeen = false;
+  startupRecoveryGuardUntil =
+    Date.now() + (loadedFromCache ? TRACK_STARTUP_GUARD_CACHE_MS : TRACK_STARTUP_GUARD_NETWORK_MS);
+}
+
+function clearStartupRecoveryGuard() {
+  startupProgressSeen = true;
+  startupRecoveryGuardUntil = 0;
+}
+
+function isInStartupRecoveryGuard() {
+  return !startupProgressSeen && Date.now() < startupRecoveryGuardUntil;
 }
 
 function suppressStallDetection(ms: number) {
@@ -82,7 +118,11 @@ function inferCodecFromContentType(contentType: string | null | undefined): stri
   if (normalized.includes('opus')) return 'OPUS';
   if (normalized.includes('ogg')) return 'OGG';
   if (normalized.includes('mpeg') || normalized.includes('mp3')) return 'MP3';
-  if (normalized.includes('aac') || normalized.includes('mp4a') || normalized.includes('audio/mp4')) {
+  if (
+    normalized.includes('aac') ||
+    normalized.includes('mp4a') ||
+    normalized.includes('audio/mp4')
+  ) {
     return 'AAC';
   }
   if (normalized.includes('flac')) return 'FLAC';
@@ -171,6 +211,54 @@ function stopTrack() {
   hasTrack = false;
   cachedTime = 0;
   lastSmoothTime = 0;
+  loadingTrackUrn = null;
+  loadingTrackGen = 0;
+  startupRecoveryGuardUntil = 0;
+  startupProgressSeen = false;
+}
+
+function resetLocalTrackState() {
+  hasTrack = false;
+  cachedTime = 0;
+  lastSmoothTime = 0;
+  startupRecoveryGuardUntil = 0;
+  startupProgressSeen = false;
+}
+
+async function syncNativeLoadState() {
+  if (!isTauriRuntime()) return;
+
+  const { eqEnabled, eqGains, normalizeVolume } = useSettingsStore.getState();
+  const playerState = usePlayerStore.getState();
+  const effectivePitchSemitones = getEffectivePitchSemitones(
+    playerState.playbackRate,
+    playerState.pitchControlMode,
+    playerState.pitchSemitones,
+  );
+
+  await Promise.all([
+    invoke('audio_set_eq', { enabled: eqEnabled, gains: eqGains }),
+    invoke('audio_set_normalization', { enabled: normalizeVolume }),
+    invoke('audio_set_volume', { volume: playerState.volume }),
+    invoke('audio_set_playback_rate', { playbackRate: playerState.playbackRate }),
+    invoke('audio_set_pitch', { pitchSemitones: effectivePitchSemitones }),
+  ]);
+}
+
+async function syncNativeRateAndPitch() {
+  if (!isTauriRuntime()) return;
+
+  const playerState = usePlayerStore.getState();
+  const effectivePitchSemitones = getEffectivePitchSemitones(
+    playerState.playbackRate,
+    playerState.pitchControlMode,
+    playerState.pitchSemitones,
+  );
+
+  await Promise.all([
+    invoke('audio_set_playback_rate', { playbackRate: playerState.playbackRate }),
+    invoke('audio_set_pitch', { pitchSemitones: effectivePitchSemitones }),
+  ]);
 }
 
 /** Reload the current track on new audio device, preserving position */
@@ -191,7 +279,18 @@ export async function reloadCurrentTrack() {
 async function loadTrack(track: Track, skipStop = false) {
   suppressStallDetection(4500);
   const gen = ++loadGen;
-  if (!skipStop) stopTrack();
+  loadingTrackUrn = track.urn;
+  loadingTrackGen = gen;
+  if (!skipStop) {
+    if (isTauriRuntime()) {
+      try {
+        await invoke('audio_stop');
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    resetLocalTrackState();
+  }
   currentUrn = track.urn;
   const urn = track.urn;
 
@@ -201,6 +300,8 @@ async function loadTrack(track: Track, skipStop = false) {
   lastSmoothTime = 0;
   seekTargetTime = -1;
   seekPendingUntil = 0;
+  startupRecoveryGuardUntil = 0;
+  startupProgressSeen = false;
   usePlayerStore.getState().setCurrentTrackStreamQuality(undefined);
   usePlayerStore.getState().setCurrentTrackStreamCodec(undefined);
   notify();
@@ -214,22 +315,24 @@ async function loadTrack(track: Track, skipStop = false) {
         }
       }, 300);
     }
+    finalizeTrackLoad(gen);
     return;
   }
 
   setupTauriBindings();
 
-  // Sync EQ state to Rust
-  const { eqEnabled, eqGains, normalizeVolume } = useSettingsStore.getState();
-  invoke('audio_set_eq', { enabled: eqEnabled, gains: eqGains }).catch(console.error);
-  invoke('audio_set_normalization', { enabled: normalizeVolume }).catch(console.error);
-
-  // Sync volume
-  invoke('audio_set_volume', { volume: usePlayerStore.getState().volume }).catch(console.error);
+  try {
+    await syncNativeLoadState();
+  } catch (error) {
+    console.error('[Audio] Failed to sync native state before load', error);
+  }
 
   // Try cached file first
   const cachedPath = await getCacheFilePath(urn);
-  if (gen !== loadGen) return;
+  if (gen !== loadGen) {
+    finalizeTrackLoad(gen);
+    return;
+  }
 
   const settings = useSettingsStore.getState();
   const crossfadeSecs = settings.crossfadeEnabled ? settings.crossfadeDuration : null;
@@ -341,6 +444,7 @@ async function loadTrack(track: Track, skipStop = false) {
     console.log(
       `[Audio] Active stream: quality=${resolvedQuality}, codec=${resolvedCodec || 'unknown'}, source=${loadedFromCache ? 'cache' : 'network'}, mime=${result.stream_content_type || 'unknown'}`,
     );
+    beginStartupRecoveryGuard(loadedFromCache);
 
     // Detect preview: real audio duration is much shorter than track metadata duration
     if (result.duration_secs != null && fallbackDuration > 0) {
@@ -352,14 +456,19 @@ async function loadTrack(track: Track, skipStop = false) {
     }
   } catch (e) {
     console.error('[Audio] Load failed:', e);
-    if (gen !== loadGen) return;
+    if (gen !== loadGen) {
+      finalizeTrackLoad(gen);
+      return;
+    }
     if (isNotFoundLoadError(e)) {
       console.warn(`[Audio] Marking track as unavailable after stream 404: ${track.urn}`);
       usePlayerStore.getState().setTrackAccessByUrn(track.urn, 'blocked');
       void handleUnavailableTrack(track);
+      finalizeTrackLoad(gen);
       return;
     }
     usePlayerStore.getState().pause();
+    finalizeTrackLoad(gen);
     return;
   }
 
@@ -368,8 +477,16 @@ async function loadTrack(track: Track, skipStop = false) {
     if (isTauriRuntime()) {
       invoke('audio_stop').catch(console.error);
     }
+    finalizeTrackLoad(gen);
     return;
   }
+
+  try {
+    await syncNativeRateAndPitch();
+  } catch (error) {
+    console.error('[Audio] Failed to re-sync native speed/pitch after load', error);
+  }
+
   hasTrack = true;
   lastTickAt = Date.now();
 
@@ -397,11 +514,21 @@ async function loadTrack(track: Track, skipStop = false) {
   updateMediaPosition();
   preloadQueue();
   isCrossfadingOut = false;
+  finalizeTrackLoad(gen);
+}
+
+function finalizeTrackLoad(gen: number) {
+  if (loadingTrackGen === gen) {
+    loadingTrackUrn = null;
+  }
 }
 
 function handleTrackEnd() {
   const state = usePlayerStore.getState();
   const sw = useSoundWaveStore.getState();
+  const { queue, queueIndex, queueSource } = state;
+  const isLast = queue.length > 0 && queueIndex >= queue.length - 1;
+  const isSoundWaveQueue = queueSource === 'soundwave' && sw.isActive && !sw.isSuspended;
 
   if (state.currentTrack) {
     sw.markTrackPlayed(state.currentTrack);
@@ -413,12 +540,18 @@ function handleTrackEnd() {
     sw.recordFeedback(state.currentTrack, 'positive');
   }
 
+  if (isSoundWaveQueue && isLast && state.repeat !== 'one') {
+    const lastTrack = queue[queueIndex] ?? state.currentTrack;
+    if (lastTrack) {
+      void continueSoundWaveQueue(lastTrack);
+      return;
+    }
+  }
+
   if (state.repeat === 'one') {
     // rodio sink is empty after track ends — must reload
     if (state.currentTrack) void loadTrack(state.currentTrack);
   } else {
-    const { queue, queueIndex, queueSource } = state;
-    const isLast = queueIndex >= queue.length - 1;
     if (isLast && state.repeat === 'off' && queue.length > 0) {
       const lastTrack = queue[queueIndex];
       if (queueSource === 'soundwave' && sw.isActive && !sw.isSuspended && lastTrack) {
@@ -465,7 +598,15 @@ async function recoverFromStall(elapsedMs: number) {
       cachedTime = clampedNativePos;
       lastSmoothTime = clampedNativePos;
       lastTickAt = now;
+      if (clampedNativePos >= TRACK_STARTUP_PROGRESS_EPSILON_SEC) {
+        clearStartupRecoveryGuard();
+      }
       notify();
+      return;
+    }
+
+    if (isInStartupRecoveryGuard() && cachedTime < TRACK_STARTUP_PROGRESS_EPSILON_SEC) {
+      lastTickAt = now;
       return;
     }
 
@@ -504,7 +645,7 @@ function setupTauriBindings() {
     // Reject stale ticks from old position while seek is in progress
     if (seekPendingUntil > Date.now() && seekTargetTime >= 0) {
       const drift = Math.abs(tickPos - seekTargetTime);
-      if (drift > 2.0) {
+      if (drift > SEEK_TICK_LANDING_TOLERANCE_SEC) {
         // Stale tick from pre-seek position — ignore it
         return;
       }
@@ -515,6 +656,9 @@ function setupTauriBindings() {
 
     cachedTime = tickPos;
     lastTickAt = Date.now();
+    if (tickPos >= TRACK_STARTUP_PROGRESS_EPSILON_SEC) {
+      clearStartupRecoveryGuard();
+    }
     if (cachedDuration <= 0) cachedDuration = fallbackDuration;
     notify();
 
@@ -530,8 +674,12 @@ function setupTauriBindings() {
   });
 
   listen('audio:ended', () => {
-    const nearTrackEnd =
-      cachedDuration > 0 && cachedTime >= Math.max(0, cachedDuration - 1.2);
+    if (isInStartupRecoveryGuard() && cachedTime < TRACK_STARTUP_PROGRESS_EPSILON_SEC) {
+      console.warn('[Audio] Ignoring early ended event during track startup warmup');
+      return;
+    }
+
+    const nearTrackEnd = cachedDuration > 0 && cachedTime >= Math.max(0, cachedDuration - 1.2);
     if (Date.now() < endedGuardUntil && !nearTrackEnd) {
       console.warn('[Audio] Ignoring spurious ended event during seek transition');
       return;
@@ -670,6 +818,9 @@ usePlayerStore.subscribe((state, prev) => {
   if (playToggled && !trackChanged) {
     if (state.isPlaying) {
       if (!hasTrack && state.currentTrack) {
+        if (loadingTrackUrn === state.currentTrack.urn) {
+          return;
+        }
         void loadTrack(state.currentTrack);
       } else {
         if (isTauriRuntime()) {
@@ -686,6 +837,24 @@ usePlayerStore.subscribe((state, prev) => {
 
   if (isTauriRuntime() && state.volume !== prev.volume) {
     invoke('audio_set_volume', { volume: state.volume }).catch(console.error);
+  }
+
+  if (isTauriRuntime() && state.playbackRate !== prev.playbackRate) {
+    invoke('audio_set_playback_rate', { playbackRate: state.playbackRate }).catch(console.error);
+  }
+
+  const effectivePitch = getEffectivePitchSemitones(
+    state.playbackRate,
+    state.pitchControlMode,
+    state.pitchSemitones,
+  );
+  const prevEffectivePitch = getEffectivePitchSemitones(
+    prev.playbackRate,
+    prev.pitchControlMode,
+    prev.pitchSemitones,
+  );
+  if (isTauriRuntime() && Math.abs(effectivePitch - prevEffectivePitch) >= 0.001) {
+    invoke('audio_set_pitch', { pitchSemitones: effectivePitch }).catch(console.error);
   }
 });
 

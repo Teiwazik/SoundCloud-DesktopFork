@@ -64,9 +64,17 @@ function isRetryableStatus(status: number): boolean {
   return status === 429 || (status >= 500 && status <= 599);
 }
 
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [300, 800, 2000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * GET через массив прокси с retry на 5xx/429.
- * Пробует каждый proxyUrl по порядку, fallback на прямой запрос если массив пуст.
+ * Пробует каждый proxyUrl по порядку, при retryable-ошибке на последнем прокси
+ * повторяет весь цикл до MAX_RETRIES раз с backoff.
  */
 export async function proxyGetWithRetry<T = any>(
   httpService: HlsHttpService,
@@ -78,22 +86,28 @@ export async function proxyGetWithRetry<T = any>(
   const candidates = proxyUrls.length > 0 ? proxyUrls : [''];
   let lastError: any;
 
-  for (const proxy of candidates) {
-    const { url, headers } = proxyTarget(proxy, targetUrl, extra);
-    try {
-      const res = (await firstValueFrom(httpService.get(url, { ...config, headers }))) as any;
-      return { data: res.data as T, headers: res.headers ?? {} };
-    } catch (err: any) {
-      lastError = err;
-      const status = err?.response?.status ?? err?.status;
-      if (status && isRetryableStatus(status) && proxy !== candidates[candidates.length - 1]) {
-        continue;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (const proxy of candidates) {
+      const { url, headers } = proxyTarget(proxy, targetUrl, extra);
+      try {
+        const res = (await firstValueFrom(httpService.get(url, { ...config, headers }))) as any;
+        return { data: res.data as T, headers: res.headers ?? {} };
+      } catch (err: any) {
+        lastError = err;
+        const status = err?.response?.status ?? err?.status;
+
+        if (status && !isRetryableStatus(status)) {
+          throw err;
+        }
       }
-      throw err;
+    }
+
+    if (attempt < MAX_RETRIES) {
+      await sleep(RETRY_DELAYS[attempt] ?? 2000);
     }
   }
 
-  throw lastError;
+  throw lastError ?? new Error(`Failed to proxy request for ${targetUrl}`);
 }
 
 export function pickTranscoding(

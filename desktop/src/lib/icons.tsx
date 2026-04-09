@@ -21,6 +21,7 @@ import {
   Disc3 as _Disc3,
   Download as _Download,
   ExternalLink as _ExternalLink,
+  Fullscreen as _Fullscreen,
   Eye as _Eye,
   Globe as _Globe,
   GripVertical as _GripVertical,
@@ -103,6 +104,7 @@ export const Clock = memo(_Clock);
 export const Compass = memo(_Compass);
 export const Disc3 = memo(_Disc3);
 export const ExternalLink = memo(_ExternalLink);
+export const Fullscreen = memo(_Fullscreen);
 export const Eye = memo(_Eye);
 export const Globe = memo(_Globe);
 export const GripVertical = memo(_GripVertical);

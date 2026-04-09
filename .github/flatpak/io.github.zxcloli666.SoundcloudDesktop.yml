@@ -62,5 +62,16 @@ modules:
     sources:
       - type: dir
         path: ../../
+        skip:
+          - .flatpak-builder
+          - backend/node_modules
+          - desktop/dist
+          - desktop/node_modules
+          - desktop/src-tauri/target
+          - release-assets-6.1.12-fix3
+          - release-assets-6.1.13-fix4
+          - release-assets-6.1.14-fix5
+          - release-assets-6.1.14-fix5-hotfix
+          - release-assets-6.1.14-fix5-hotfix2
       - cargo-sources.json
       - node-sources.json

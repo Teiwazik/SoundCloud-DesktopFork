@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import { useArtworkGradientPalette } from '../lib/artwork-palette';
+import { usePlayerStore } from '../stores/player';
 import { useSettingsStore } from '../stores/settings';
 
 function clamp(value: number, min: number, max: number): number {
@@ -32,8 +34,20 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${clamp(alpha, 0, 1)})`;
 }
 
-const TRANSPARENT_LAYER =
-  'linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0))';
+function rgbTupleToHex([r, g, b]: [number, number, number]): string {
+  return `#${[r, g, b]
+    .map((value) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+function mixHex(from: string, to: string, amount: number): string {
+  const [fromR, fromG, fromB] = hexToRgbTuple(from);
+  const [toR, toG, toB] = hexToRgbTuple(to);
+  const mix = (left: number, right: number) => left + (right - left) * clamp(amount, 0, 1);
+  return rgbTupleToHex([mix(fromR, toR), mix(fromG, toG), mix(fromB, toB)]);
+}
+
+const TRANSPARENT_LAYER = 'linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0))';
 const TRANSPARENT_STACK = `${TRANSPARENT_LAYER}, ${TRANSPARENT_LAYER}, ${TRANSPARENT_LAYER}`;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -42,6 +56,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const bgPrimary = useSettingsStore((s) => s.bgPrimary);
   const glassBlur = useSettingsStore((s) => s.glassBlur);
   const themeGradientEnabled = useSettingsStore((s) => s.themeGradientEnabled);
+  const themeGradientFollowArtwork = useSettingsStore((s) => s.themeGradientFollowArtwork);
   const themeGradientType = useSettingsStore((s) => s.themeGradientType);
   const themeGradientColorA = useSettingsStore((s) => s.themeGradientColorA);
   const themeGradientColorB = useSettingsStore((s) => s.themeGradientColorB);
@@ -54,19 +69,39 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const themeGlowIntensity = useSettingsStore((s) => s.themeGlowIntensity);
   const themeGlowOpacity = useSettingsStore((s) => s.themeGlowOpacity);
   const lowPerformanceMode = useSettingsStore((s) => s.lowPerformanceMode);
+  const currentArtworkUrl = usePlayerStore((s) => s.currentTrack?.artwork_url ?? null);
+  const artworkGradientPalette = useArtworkGradientPalette(
+    themeGradientFollowArtwork ? currentArtworkUrl : null,
+  );
+  const gradientFromArtworkActive =
+    themePreset === 'custom' &&
+    themeGradientEnabled &&
+    themeGradientFollowArtwork &&
+    Boolean(artworkGradientPalette);
+  const effectiveAccentColor = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientB
+    : accentColor;
+  const effectiveThemeGradientColorA = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientA
+    : themeGradientColorA;
+  const effectiveThemeGradientColorB = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientB
+    : themeGradientColorB;
+  const effectiveThemeGradientColorC = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientC
+    : themeGradientColorC;
 
   useEffect(() => {
     const root = document.documentElement;
-    const rgb = hexToRgb(accentColor);
-    const [r, g, b] = hexToRgbTuple(accentColor);
+    const rgb = hexToRgb(effectiveAccentColor);
+    const [r, g, b] = hexToRgbTuple(effectiveAccentColor);
     const bgRgb = hexToRgb(bgPrimary);
     const hover = `rgb(${Math.min(255, r + 26)}, ${Math.min(255, g + 26)}, ${Math.min(255, b + 26)})`;
     const lum = 0.299 * r + 0.587 * g + 0.114 * b;
     const isCustomTheme = themePreset === 'custom';
     const gradientActive = isCustomTheme && themeGradientEnabled;
     const glowActive = isCustomTheme && themeGlowEnabled;
-    const animateGradient =
-      gradientActive && themeGradientAnimated && !lowPerformanceMode;
+    const animateGradient = gradientActive && themeGradientAnimated && !lowPerformanceMode;
     const glowStrength = glowActive ? clamp(themeGlowIntensity / 100, 0, 1) : 0;
     const glowAlpha = glowActive ? clamp(themeGlowOpacity / 100, 0, 1) : 0;
 
@@ -75,52 +110,98 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       : isCustomTheme
         ? `rgba(${rgb}, 0)`
         : `rgba(${rgb}, 0.2)`;
-    const selection = glowActive
-      ? `rgba(${rgb}, ${0.18 + glowAlpha * 0.34})`
-      : `rgba(${rgb}, 0.3)`;
+    const selection = glowActive ? `rgba(${rgb}, ${0.18 + glowAlpha * 0.34})` : `rgba(${rgb}, 0.3)`;
+    const surfaceAccentColor = isCustomTheme
+      ? mixHex(
+          effectiveAccentColor,
+          bgPrimary,
+          gradientFromArtworkActive ? 0.62 : gradientActive ? 0.46 : 0.4,
+        )
+      : mixHex(effectiveAccentColor, bgPrimary, 0.54);
+    const surfaceGradientA = gradientActive
+      ? mixHex(effectiveThemeGradientColorA, bgPrimary, gradientFromArtworkActive ? 0.52 : 0.38)
+      : surfaceAccentColor;
+    const surfaceGradientB = gradientActive
+      ? mixHex(effectiveThemeGradientColorB, bgPrimary, gradientFromArtworkActive ? 0.64 : 0.48)
+      : surfaceAccentColor;
+    const surfaceGradientC = gradientActive
+      ? mixHex(effectiveThemeGradientColorC, bgPrimary, gradientFromArtworkActive ? 0.58 : 0.42)
+      : surfaceAccentColor;
 
     const accentGradient = gradientActive
       ? themeGradientType === 'radial'
-        ? `radial-gradient(circle at 18% 18%, ${themeGradientColorA} 0%, ${themeGradientColorB} 48%, ${themeGradientColorC} 100%)`
-        : `linear-gradient(${themeGradientAngle}deg, ${themeGradientColorA} 0%, ${themeGradientColorB} 50%, ${themeGradientColorC} 100%)`
-      : `linear-gradient(135deg, ${accentColor} 0%, ${hover} 100%)`;
+        ? `radial-gradient(circle at 18% 18%, ${effectiveThemeGradientColorA} 0%, ${effectiveThemeGradientColorB} 48%, ${effectiveThemeGradientColorC} 100%)`
+        : `linear-gradient(${themeGradientAngle}deg, ${effectiveThemeGradientColorA} 0%, ${effectiveThemeGradientColorB} 50%, ${effectiveThemeGradientColorC} 100%)`
+      : `linear-gradient(135deg, ${effectiveAccentColor} 0%, ${hover} 100%)`;
     const accentGradientHover = gradientActive
       ? themeGradientType === 'radial'
-        ? `radial-gradient(circle at 76% 20%, ${themeGradientColorB} 0%, ${themeGradientColorC} 52%, ${themeGradientColorA} 100%)`
-        : `linear-gradient(${(themeGradientAngle + 24) % 360}deg, ${themeGradientColorB} 0%, ${themeGradientColorC} 52%, ${themeGradientColorA} 100%)`
-      : `linear-gradient(135deg, ${hover} 0%, ${accentColor} 100%)`;
+        ? `radial-gradient(circle at 76% 20%, ${effectiveThemeGradientColorB} 0%, ${effectiveThemeGradientColorC} 52%, ${effectiveThemeGradientColorA} 100%)`
+        : `linear-gradient(${(themeGradientAngle + 24) % 360}deg, ${effectiveThemeGradientColorB} 0%, ${effectiveThemeGradientColorC} 52%, ${effectiveThemeGradientColorA} 100%)`
+      : `linear-gradient(135deg, ${hover} 0%, ${effectiveAccentColor} 100%)`;
     const accentGradientSoft = gradientActive
       ? themeGradientType === 'radial'
-        ? `radial-gradient(circle at 20% 20%, ${hexToRgba(themeGradientColorA, 0.26)} 0%, ${hexToRgba(themeGradientColorB, 0.18)} 48%, ${hexToRgba(themeGradientColorC, 0.12)} 100%)`
-        : `linear-gradient(${themeGradientAngle}deg, ${hexToRgba(themeGradientColorA, 0.28)} 0%, ${hexToRgba(themeGradientColorB, 0.2)} 50%, ${hexToRgba(themeGradientColorC, 0.14)} 100%)`
-      : `linear-gradient(135deg, ${hexToRgba(accentColor, 0.24)} 0%, ${hexToRgba(accentColor, 0.12)} 100%)`;
+        ? `radial-gradient(circle at 20% 20%, ${hexToRgba(surfaceGradientA, gradientFromArtworkActive ? 0.16 : 0.18)} 0%, ${hexToRgba(surfaceGradientB, gradientFromArtworkActive ? 0.1 : 0.12)} 48%, ${hexToRgba(surfaceGradientC, gradientFromArtworkActive ? 0.07 : 0.08)} 100%)`
+        : `linear-gradient(${themeGradientAngle}deg, ${hexToRgba(surfaceGradientA, gradientFromArtworkActive ? 0.16 : 0.18)} 0%, ${hexToRgba(surfaceGradientB, gradientFromArtworkActive ? 0.11 : 0.13)} 50%, ${hexToRgba(surfaceGradientC, gradientFromArtworkActive ? 0.08 : 0.09)} 100%)`
+      : `linear-gradient(135deg, ${hexToRgba(surfaceAccentColor, 0.16)} 0%, ${hexToRgba(surfaceAccentColor, 0.07)} 100%)`;
     const accentGradientSize = animateGradient ? '180% 180%' : '100% 100%';
     const accentGlowShadow = glowActive
-      ? `0 0 ${Math.round(16 + glowStrength * 20)}px ${hexToRgba(accentColor, 0.16 + glowAlpha * 0.2)}`
+      ? `0 0 ${Math.round(16 + glowStrength * 20)}px ${hexToRgba(effectiveAccentColor, 0.16 + glowAlpha * 0.2)}`
       : `0 0 0 rgba(${rgb}, 0)`;
     const accentGlowStrong = glowActive
-      ? `0 0 ${Math.round(24 + glowStrength * 30)}px ${hexToRgba(accentColor, 0.2 + glowAlpha * 0.26)}`
+      ? `0 0 ${Math.round(24 + glowStrength * 30)}px ${hexToRgba(effectiveAccentColor, 0.2 + glowAlpha * 0.26)}`
       : accentGlowShadow;
     const accentSoftBorder = gradientActive
-      ? hexToRgba(themeGradientColorB, 0.28)
-      : hexToRgba(accentColor, 0.22);
-    const accentGlassTint = gradientActive ? themeGradientColorB : accentColor;
-    const glassTint = isCustomTheme
-      ? 0.04 + (gradientActive ? 0.02 : 0) + glowAlpha * 0.07
+      ? hexToRgba(
+          gradientFromArtworkActive ? surfaceGradientB : effectiveThemeGradientColorB,
+          gradientFromArtworkActive ? 0.14 : 0.18,
+        )
+      : hexToRgba(surfaceAccentColor, 0.16);
+    const accentGlassTint = gradientActive
+      ? gradientFromArtworkActive
+        ? surfaceGradientB
+        : surfaceGradientB
+      : surfaceAccentColor;
+    const baseGlassTint = isCustomTheme
+      ? 0.026 + (gradientActive ? 0.014 : 0) + glowAlpha * 0.05
       : 0.02;
-    const glassHoverTint = isCustomTheme ? glassTint + 0.04 : 0.05;
+    const glassTint = gradientFromArtworkActive
+      ? baseGlassTint * 0.66
+      : gradientActive
+        ? baseGlassTint * 0.82
+        : baseGlassTint;
+    const glassHoverTint = gradientFromArtworkActive
+      ? glassTint + 0.024
+      : gradientActive
+        ? glassTint + 0.028
+        : isCustomTheme
+          ? glassTint + 0.04
+          : 0.05;
+    const glassSaturate = gradientFromArtworkActive
+      ? 1.04 + glowAlpha * 0.12
+      : gradientActive
+        ? 1.16 + glowAlpha * 0.14
+        : isCustomTheme
+          ? 1.28 + glowAlpha * 0.16
+          : 1.42;
+    const glassFeaturedSaturate = gradientFromArtworkActive
+      ? 1.1 + glowAlpha * 0.14
+      : gradientActive
+        ? 1.24 + glowAlpha * 0.16
+        : isCustomTheme
+          ? 1.36 + glowAlpha * 0.18
+          : 1.55;
     const glassBorder = isCustomTheme
-      ? hexToRgba(accentColor, 0.08 + glowAlpha * 0.12)
+      ? hexToRgba(surfaceAccentColor, 0.06 + glowAlpha * 0.08)
       : 'rgba(255, 255, 255, 0.05)';
     const glassBorderHi = isCustomTheme
-      ? hexToRgba(accentColor, 0.14 + glowAlpha * 0.18)
+      ? hexToRgba(surfaceAccentColor, 0.1 + glowAlpha * 0.12)
       : 'rgba(255, 255, 255, 0.1)';
     const featureShadow = glowActive
-      ? `0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 12px 48px rgba(0, 0, 0, 0.34), 0 0 ${Math.round(26 + glowStrength * 44)}px ${hexToRgba(accentColor, 0.12 + glowAlpha * 0.18)}`
+      ? `0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 12px 48px rgba(0, 0, 0, 0.34), 0 0 ${Math.round(26 + glowStrength * 44)}px ${hexToRgba(effectiveAccentColor, 0.12 + glowAlpha * 0.18)}`
       : '0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 8px 40px rgba(0, 0, 0, 0.3)';
-    const headingAccent = gradientActive ? themeGradientColorC : accentColor;
+    const headingAccent = gradientActive ? effectiveThemeGradientColorC : effectiveAccentColor;
 
-    root.style.setProperty('--color-accent', accentColor);
+    root.style.setProperty('--color-accent', effectiveAccentColor);
     root.style.setProperty('--color-accent-hover', hover);
     root.style.setProperty('--color-accent-glow', accentGlow);
     root.style.setProperty('--color-accent-selection', selection);
@@ -138,6 +219,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.style.setProperty('--theme-accent-shadow-strong', accentGlowStrong);
     root.style.setProperty('--theme-accent-soft-border', accentSoftBorder);
     root.style.setProperty('--theme-glass-blur', `${Math.max(12, glassBlur)}px`);
+    root.style.setProperty('--theme-glass-saturate', `${glassSaturate}`);
+    root.style.setProperty('--theme-glass-featured-saturate', `${glassFeaturedSaturate}`);
     root.style.setProperty(
       '--theme-glass-bg',
       `linear-gradient(180deg, rgba(255, 255, 255, 0.028), ${hexToRgba(accentGlassTint, glassTint)})`,
@@ -160,13 +243,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.style.setProperty(
       '--theme-greeting-gradient',
       gradientActive
-        ? `linear-gradient(90deg, #ffffff 0%, rgba(255, 255, 255, 0.86) 34%, ${themeGradientColorA} 58%, ${themeGradientColorC} 100%)`
+        ? `linear-gradient(90deg, #ffffff 0%, rgba(255, 255, 255, 0.86) 34%, ${effectiveThemeGradientColorA} 58%, ${effectiveThemeGradientColorC} 100%)`
         : `linear-gradient(90deg, #ffffff 0%, rgba(255, 255, 255, 0.84) 48%, ${headingAccent} 100%)`,
     );
     root.style.setProperty(
       '--theme-heading-shadow',
       glowActive
-        ? `drop-shadow(0 0 ${Math.round(14 + glowStrength * 18)}px ${hexToRgba(accentColor, 0.12 + glowAlpha * 0.2)})`
+        ? `drop-shadow(0 0 ${Math.round(14 + glowStrength * 18)}px ${hexToRgba(effectiveAccentColor, 0.12 + glowAlpha * 0.2)})`
         : 'none',
     );
     root.dataset.themePreset = themePreset;
@@ -175,8 +258,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.style.backgroundColor = bgPrimary;
     document.body.style.backgroundColor = bgPrimary;
   }, [
-    accentColor,
     bgPrimary,
+    effectiveAccentColor,
+    effectiveThemeGradientColorA,
+    effectiveThemeGradientColorB,
+    effectiveThemeGradientColorC,
     glassBlur,
     lowPerformanceMode,
     themeGlowEnabled,
@@ -185,11 +271,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     themeGradientAngle,
     themeGradientAnimated,
     themeGradientAnimation,
-    themeGradientColorA,
-    themeGradientColorB,
-    themeGradientColorC,
     themeGradientEnabled,
     themeGradientSpeed,
+    themeGradientFollowArtwork,
     themeGradientType,
     themePreset,
   ]);

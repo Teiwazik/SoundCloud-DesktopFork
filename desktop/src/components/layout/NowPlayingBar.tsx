@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { artworkPanelApi } from '../../components/music/LyricsPanel';
 import { api, getTrackComments } from '../../lib/api';
+import { isAppBackgrounded } from '../../lib/app-visibility';
 import {
   getCurrentTime,
   getDuration,
@@ -16,10 +17,9 @@ import {
   subscribe,
 } from '../../lib/audio';
 import { updateDiscordLyric } from '../../lib/discord';
-import { getAnimationFrameBudgetMs } from '../../lib/framerate';
 import { art, formatTime } from '../../lib/formatters';
+import { getAnimationFrameBudgetMs } from '../../lib/framerate';
 import { invalidateAllLikesCache } from '../../lib/hooks';
-import { isAppBackgrounded } from '../../lib/app-visibility';
 import { useIsMobile } from '../../lib/hooks/useIsMobile';
 import {
   audioLines16,
@@ -31,6 +31,7 @@ import {
   playBlack20,
   repeat1Icon16,
   repeatIcon16,
+  SlidersHorizontal,
   shuffleIcon16,
   skipBack20,
   skipForward20,
@@ -39,15 +40,38 @@ import {
   volumeXIcon16,
 } from '../../lib/icons';
 import { optimisticToggleLike } from '../../lib/likes';
-import { searchLyrics } from '../../lib/lyrics';
+import { LYRICS_SEARCH_QUERY_VERSION, searchLyrics } from '../../lib/lyrics';
 import { useDislikesStore } from '../../stores/dislikes';
 import { useArtworkStore, useLyricsStore } from '../../stores/lyrics';
-import { type Track, usePlayerStore } from '../../stores/player';
+import {
+  getEffectivePitchSemitones,
+  isTrackPlaybackRateEnabledForTrack,
+  PITCH_SEMITONES_MAX,
+  PITCH_SEMITONES_MIN,
+  PITCH_SEMITONES_STEP,
+  PLAYBACK_RATE_MAX,
+  PLAYBACK_RATE_MIN,
+  PLAYBACK_RATE_STEP,
+  type Track,
+  usePlayerStore,
+} from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
 import { type MoodLabel, useSoundWaveStore } from '../../stores/soundwave';
 import { EqualizerPanel } from '../music/EqualizerPanel';
 import { StreamQualityBadge } from '../music/StreamQualityBadge';
 import { Visualizer } from '../music/Visualizer';
+
+function formatPlaybackRate(rate: number): string {
+  return `${rate
+    .toFixed(2)
+    .replace(/\.00$/, '')
+    .replace(/(\.\d)0$/, '$1')}x`;
+}
+
+function formatPitchSemitones(semitones: number): string {
+  if (Math.abs(semitones) < 0.001) return '0 st';
+  return `${semitones > 0 ? '+' : ''}${semitones.toFixed(1).replace(/\.0$/, '')} st`;
+}
 
 /* ── Progress Slider ─────────────────────────────────────────── */
 
@@ -754,11 +778,345 @@ const LyricsBtn = React.memo(() => {
   const close = useLyricsStore((s) => s.close);
   const openFromMiniPlayer = useLyricsStore((s) => s.openFromMiniPlayer);
   return (
-    <button type="button" onClick={() => (open ? close() : openFromMiniPlayer())} className={btnClass(open, 'sm')}>
+    <button
+      type="button"
+      onClick={() => (open ? close() : openFromMiniPlayer())}
+      className={btnClass(open, 'sm')}
+    >
       <MicVocal size={16} />
     </button>
   );
 });
+
+/* ── Playback Speed ──────────────────────────────────────────── */
+
+const PlaybackSpeedControl = React.memo(() => {
+  const { t } = useTranslation();
+  const playbackRate = usePlayerStore((s) => s.playbackRate);
+  const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate);
+  const resetPlaybackRate = usePlayerStore((s) => s.resetPlaybackRate);
+  const isDefaultRate = Math.abs(playbackRate - 1) < 0.001;
+
+  return (
+    <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/38">
+          {t('player.playbackSpeed')}
+        </span>
+        <button
+          type="button"
+          title={isDefaultRate ? t('player.playbackSpeed') : t('player.playbackSpeedReset')}
+          onClick={() => {
+            if (!isDefaultRate) resetPlaybackRate();
+          }}
+          className={`min-w-[46px] text-right text-[11px] font-semibold tabular-nums transition-colors ${
+            isDefaultRate ? 'text-white/35 hover:text-white/60' : 'text-accent hover:text-accent/80'
+          }`}
+        >
+          {formatPlaybackRate(playbackRate)}
+        </button>
+      </div>
+
+      <Slider.Root
+        className="group/rate relative flex h-5 w-full cursor-pointer select-none touch-none items-center"
+        aria-label={t('player.playbackSpeed')}
+        value={[playbackRate]}
+        min={PLAYBACK_RATE_MIN}
+        max={PLAYBACK_RATE_MAX}
+        step={PLAYBACK_RATE_STEP}
+        onValueChange={([value]) => setPlaybackRate(value)}
+        onWheel={(event) => {
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+          setPlaybackRate(
+            playbackRate + (event.deltaY < 0 ? PLAYBACK_RATE_STEP : -PLAYBACK_RATE_STEP),
+          );
+        }}
+      >
+        <Slider.Track className="relative h-[3px] grow rounded-full bg-white/[0.08] transition-all duration-150 group-hover/rate:h-[4px]">
+          <Slider.Range className="absolute h-full rounded-full theme-accent-progress theme-accent-animated" />
+        </Slider.Track>
+        <Slider.Thumb className="block h-2.5 w-2.5 rounded-full outline-none transition-all duration-150 theme-accent-thumb theme-accent-animated scale-0 opacity-0 group-hover/rate:scale-100 group-hover/rate:opacity-100" />
+      </Slider.Root>
+    </div>
+  );
+});
+
+const TrackPlaybackRateToggle = React.memo(() => {
+  const { t } = useTranslation();
+  const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const playbackRate = usePlayerStore((s) => s.playbackRate);
+  const trackPlaybackRatesByUrn = usePlayerStore((s) => s.trackPlaybackRatesByUrn);
+  const trackPlaybackRateEnabledByUrn = usePlayerStore((s) => s.trackPlaybackRateEnabledByUrn);
+  const setCurrentTrackPlaybackRateEnabled = usePlayerStore(
+    (s) => s.setCurrentTrackPlaybackRateEnabled,
+  );
+  const isEnabled = isTrackPlaybackRateEnabledForTrack(currentTrack, trackPlaybackRateEnabledByUrn);
+  const displayedRate = currentTrack?.urn
+    ? (trackPlaybackRatesByUrn[currentTrack.urn] ?? playbackRate)
+    : playbackRate;
+
+  return (
+    <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/38">
+            {t('player.playbackSpeedTrackToggle')}
+          </p>
+          <p className="truncate pt-1 text-[10px] text-white/35">
+            {isEnabled
+              ? t('player.playbackSpeedTrackSaved', { rate: formatPlaybackRate(displayedRate) })
+              : t('player.playbackSpeedTrackGlobal', { rate: formatPlaybackRate(playbackRate) })}
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isEnabled}
+          disabled={!currentTrack}
+          title={
+            isEnabled ? t('player.playbackSpeedTrackDisable') : t('player.playbackSpeedTrackEnable')
+          }
+          onClick={() => setCurrentTrackPlaybackRateEnabled(!isEnabled)}
+          className={`relative h-7 w-12 shrink-0 rounded-full border transition-all duration-200 ${
+            !currentTrack
+              ? 'cursor-not-allowed border-white/[0.06] bg-white/[0.04] opacity-45'
+              : isEnabled
+                ? 'border-accent/35 bg-accent/85 shadow-[0_0_20px_var(--color-accent-glow)]'
+                : 'border-white/[0.10] bg-white/[0.06] hover:bg-white/[0.10]'
+          }`}
+        >
+          <span
+            className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full transition-all duration-200 ${
+              isEnabled ? 'left-[23px] bg-black' : 'left-1 bg-white'
+            }`}
+          />
+        </button>
+      </div>
+    </div>
+  );
+});
+
+const PitchControl = React.memo(() => {
+  const { t } = useTranslation();
+  const playbackRate = usePlayerStore((s) => s.playbackRate);
+  const pitchSemitones = usePlayerStore((s) => s.pitchSemitones);
+  const pitchControlMode = usePlayerStore((s) => s.pitchControlMode);
+  const setPitchSemitones = usePlayerStore((s) => s.setPitchSemitones);
+  const resetPitchSemitones = usePlayerStore((s) => s.resetPitchSemitones);
+  const effectivePitchSemitones = getEffectivePitchSemitones(
+    playbackRate,
+    pitchControlMode,
+    pitchSemitones,
+  );
+  const isManualMode = pitchControlMode === 'manual';
+  const canResetPitch = isManualMode && Math.abs(pitchSemitones) >= 0.001;
+
+  return (
+    <div
+      className={`rounded-[18px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 ${isManualMode ? '' : 'opacity-70'}`}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-white/38">
+            {t('player.pitch')}
+          </span>
+          <span
+            className={`rounded-full border px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] ${
+              isManualMode
+                ? 'border-white/12 bg-white/[0.05] text-white/42'
+                : 'border-accent/25 bg-accent/10 text-accent/85'
+            }`}
+          >
+            {isManualMode ? t('player.pitchModeManualShort') : t('player.pitchModeAutoShort')}
+          </span>
+        </div>
+        <button
+          type="button"
+          title={
+            isManualMode
+              ? canResetPitch
+                ? t('player.pitchReset')
+                : t('player.pitch')
+              : t('player.pitchModeAuto')
+          }
+          onClick={() => {
+            if (canResetPitch) resetPitchSemitones();
+          }}
+          className={`min-w-[52px] text-right text-[11px] font-semibold tabular-nums transition-colors ${
+            canResetPitch ? 'text-accent hover:text-accent/80' : 'text-white/35 hover:text-white/60'
+          }`}
+        >
+          {formatPitchSemitones(effectivePitchSemitones)}
+        </button>
+      </div>
+
+      <Slider.Root
+        className="group/pitch relative flex h-5 w-full cursor-pointer select-none touch-none items-center"
+        aria-label={t('player.pitch')}
+        value={[effectivePitchSemitones]}
+        min={PITCH_SEMITONES_MIN}
+        max={PITCH_SEMITONES_MAX}
+        step={PITCH_SEMITONES_STEP}
+        disabled={!isManualMode}
+        onValueChange={([value]) => {
+          if (isManualMode) {
+            setPitchSemitones(value);
+          }
+        }}
+        onWheel={(event) => {
+          if (!isManualMode) return;
+          if (event.cancelable) {
+            event.preventDefault();
+          }
+          setPitchSemitones(
+            pitchSemitones + (event.deltaY < 0 ? PITCH_SEMITONES_STEP : -PITCH_SEMITONES_STEP),
+          );
+        }}
+      >
+        <Slider.Track className="relative h-[3px] grow rounded-full bg-white/[0.08] transition-all duration-150 group-hover/pitch:h-[4px]">
+          <Slider.Range className="absolute h-full rounded-full theme-accent-progress theme-accent-animated" />
+        </Slider.Track>
+        <Slider.Thumb className="block h-2.5 w-2.5 rounded-full outline-none transition-all duration-150 theme-accent-thumb theme-accent-animated scale-0 opacity-0 group-hover/pitch:scale-100 group-hover/pitch:opacity-100" />
+      </Slider.Root>
+    </div>
+  );
+});
+
+const PitchModeToggle = React.memo(() => {
+  const { t } = useTranslation();
+  const pitchControlMode = usePlayerStore((s) => s.pitchControlMode);
+  const setPitchControlMode = usePlayerStore((s) => s.setPitchControlMode);
+
+  return (
+    <div className="grid grid-cols-2 gap-1 rounded-[16px] border border-white/[0.08] bg-white/[0.04] p-[3px]">
+      <button
+        type="button"
+        title={t('player.pitchModeAuto')}
+        onClick={() => setPitchControlMode('auto')}
+        className={`h-8 rounded-[12px] px-2 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors ${
+          pitchControlMode === 'auto' ? 'bg-white text-black' : 'text-white/38 hover:text-white/70'
+        }`}
+      >
+        {t('player.pitchModeAutoShort')}
+      </button>
+      <button
+        type="button"
+        title={t('player.pitchModeManual')}
+        onClick={() => setPitchControlMode('manual')}
+        className={`h-8 rounded-[12px] px-2 text-[9px] font-semibold uppercase tracking-[0.08em] transition-colors ${
+          pitchControlMode === 'manual'
+            ? 'bg-white text-black'
+            : 'text-white/38 hover:text-white/70'
+        }`}
+      >
+        {t('player.pitchModeManualShort')}
+      </button>
+    </div>
+  );
+});
+
+const PlaybackTuningMenu = React.memo(({ disabled = false }: { disabled?: boolean }) => {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const node = rootRef.current;
+      if (!node) return;
+      const target = event.target as Node;
+      if (!node.contains(target)) {
+        setOpen(false);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <div
+        className={`pointer-events-none absolute bottom-full left-0 z-[40] mb-3 w-[320px] max-w-[calc(100vw-40px)] origin-bottom-left transition-all duration-200 ease-[var(--ease-apple)] ${
+          open ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
+        }`}
+      >
+        <div className="pointer-events-auto overflow-hidden rounded-[22px] border border-white/[0.14] bg-[#101012]/96 p-3 shadow-[0_24px_90px_rgba(0,0,0,0.62)] backdrop-blur-2xl">
+          <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-white/[0.06] to-transparent pointer-events-none" />
+          <div className="relative space-y-2.5">
+            <div className="flex items-center gap-2 px-0.5">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.04] text-white/55">
+                <SlidersHorizontal size={14} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/68">
+                  {t('player.soundTuning', 'Sound tuning')}
+                </p>
+                <p className="text-[10px] text-white/28">
+                  {t('player.playbackSpeed')} / {t('player.pitch')}
+                </p>
+              </div>
+            </div>
+            <PitchModeToggle />
+            <TrackPlaybackRateToggle />
+            <PlaybackSpeedControl />
+            <PitchControl />
+          </div>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={
+          open
+            ? t('player.soundTuningClose', 'Close sound tuning')
+            : t('player.soundTuningOpen', 'Open sound tuning')
+        }
+        title={
+          open
+            ? t('player.soundTuningClose', 'Close sound tuning')
+            : t('player.soundTuningOpen', 'Open sound tuning')
+        }
+        onClick={() => setOpen((value) => !value)}
+        className={btnClass(open, 'sm')}
+      >
+        <SlidersHorizontal size={16} />
+      </button>
+    </div>
+  );
+});
+
+const VolumeControlCluster = React.memo(() => (
+  <div className="flex shrink-0 items-center gap-1.5">
+    <VolumeSlider className="w-[100px] max-[1400px]:w-[84px] max-[1220px]:w-[72px]" />
+    <div className="max-[1360px]:hidden">
+      <VolumeLabel />
+    </div>
+    <ControlVolumeBtn size="sm" />
+  </div>
+));
 
 const EqBtn = React.memo(() => {
   const eqEnabled = useSettingsStore((s) => s.eqEnabled);
@@ -780,18 +1138,18 @@ const TrackInfo = React.memo(() => {
 
   if (!currentTrack) {
     return (
-      <div className="flex items-center gap-3.5 w-[280px] min-w-0">
+      <div className="flex items-center gap-3.5 w-full min-w-0">
         <p className="text-[13px] text-white/15">Not playing</p>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-3.5 w-[280px] min-w-0">
-        <div
-          className="relative w-14 h-14 rounded-[10px] shrink-0 overflow-hidden cursor-pointer shadow-xl shadow-black/40 ring-1 ring-white/[0.06] hover:ring-white/[0.12] transition-all duration-200 group/art"
-          onClick={() => artworkPanelApi.openFromMiniPlayer()}
-        >
+    <div className="flex items-center gap-3.5 w-full min-w-0">
+      <div
+        className="relative w-14 h-14 rounded-[10px] shrink-0 overflow-hidden cursor-pointer shadow-xl shadow-black/40 ring-1 ring-white/[0.06] hover:ring-white/[0.12] transition-all duration-200 group/art"
+        onClick={() => artworkPanelApi.openFromMiniPlayer()}
+      >
         {artworkSmall ? (
           <img src={artworkSmall} alt="" className="w-full h-full object-cover" />
         ) : (
@@ -901,17 +1259,24 @@ const DiscordLyricsSyncer = React.memo(() => {
   const lyricsSyncEnabled = discordRpc && discordRpcMode === 'text';
 
   const { data: lyrics } = useQuery({
-    queryKey: ['lyrics', 7, currentTrack?.urn, currentTrack?.user.username, currentTrack?.title],
-    queryFn: () => searchLyrics(currentTrack!.urn, currentTrack!.user.username, currentTrack!.title, {
-      uploaderUsername: currentTrack!.user.username,
-      originalTitle: currentTrack!.title,
-      durationMs: currentTrack!.duration,
-      genre: currentTrack!.genre ?? null,
-      tagList: currentTrack!.tag_list ?? null,
-      description: currentTrack!.description ?? null,
-      createdAt: currentTrack!.created_at ?? null,
-      artworkUrl: currentTrack!.artwork_url ?? null,
-    }),
+    queryKey: [
+      'lyrics',
+      LYRICS_SEARCH_QUERY_VERSION,
+      currentTrack?.urn,
+      currentTrack?.user.username,
+      currentTrack?.title,
+    ],
+    queryFn: () =>
+      searchLyrics(currentTrack!.urn, currentTrack!.user.username, currentTrack!.title, {
+        uploaderUsername: currentTrack!.user.username,
+        originalTitle: currentTrack!.title,
+        durationMs: currentTrack!.duration,
+        genre: currentTrack!.genre ?? null,
+        tagList: currentTrack!.tag_list ?? null,
+        description: currentTrack!.description ?? null,
+        createdAt: currentTrack!.created_at ?? null,
+        artworkUrl: currentTrack!.artwork_url ?? null,
+      }),
     enabled: lyricsSyncEnabled && !!currentTrack?.urn,
     staleTime: Number.POSITIVE_INFINITY,
     retry: 0,
@@ -965,17 +1330,21 @@ export const NowPlayingBar = React.memo(
         <div className="relative z-10" style={{ isolation: 'isolate' }}>
           {!isMobile && <ProgressSlider />}
           <div
-            className={`${isMobile ? 'h-[72px]' : 'h-[76px]'} flex items-center px-5 gap-3 relative`}
+            className={
+              isMobile
+                ? 'h-[72px] flex items-center px-5 gap-3 relative'
+                : 'min-h-[76px] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-5 py-2'
+            }
           >
             {/* Left: track info */}
-            <div className="w-[320px] min-w-0">
+            <div className="w-full min-w-0 max-w-[320px]">
               <TrackInfo />
             </div>
 
             {!isMobile ? (
               <>
                 {/* Center: controls */}
-                <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-0.5">
+                <div className="flex min-w-0 flex-col items-center justify-self-center gap-0.5">
                   <div className="flex items-center gap-0.5">
                     <ShuffleBtn />
                     <PrevBtn />
@@ -986,14 +1355,13 @@ export const NowPlayingBar = React.memo(
                   <ProgressTime />
                 </div>
 
-                {/* Right: volume + queue */}
-                <div className="ml-auto flex items-center gap-0.5 w-[320px] justify-end">
+                {/* Right: tuning + volume + actions */}
+                <div className="flex w-full min-w-0 max-w-[760px] flex-wrap items-center justify-end justify-self-end gap-x-1.5 gap-y-1">
+                  <PlaybackTuningMenu disabled={isFullscreenOverlayOpen} />
                   <EqBtn />
                   <LyricsBtn />
                   <QueueBtn onClick={onQueueToggle} active={queueOpen} />
-                  <ControlVolumeBtn size="sm" />
-                  <VolumeSlider className="w-[100px]" />
-                  <VolumeLabel />
+                  <VolumeControlCluster />
                 </div>
               </>
             ) : (

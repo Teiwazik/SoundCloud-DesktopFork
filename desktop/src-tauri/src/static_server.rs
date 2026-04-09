@@ -102,10 +102,9 @@ fn emit_rpc_open_to_app(app: &tauri::AppHandle, urn: &str) {
 fn transparent_png_bytes() -> &'static [u8] {
     // 1x1 transparent PNG
     &[
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0,
-        1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248,
-        255, 255, 63, 0, 5, 254, 2, 254, 167, 53, 129, 132, 0, 0, 0, 0, 73, 69, 78, 68, 174,
-        66, 96, 130,
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 255, 255, 63, 0,
+        5, 254, 2, 254, 167, 53, 129, 132, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ]
 }
 
@@ -160,52 +159,59 @@ pub async fn start(wallpapers_dir: PathBuf, app_handle: tauri::AppHandle) -> u16
     let rpc_open_route = warp::path!("rpc" / "open")
         .and(warp::query::<HashMap<String, String>>())
         .and(with_app_handle(rpc_open_app))
-        .and_then(|query: HashMap<String, String>, app: tauri::AppHandle| async move {
-            let urn = query
-                .get("urn")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
+        .and_then(
+            |query: HashMap<String, String>, app: tauri::AppHandle| async move {
+                let urn = query
+                    .get("urn")
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
 
-            let Some(urn) = urn else {
-                return Ok::<_, warp::Rejection>(rpc_open_response(
-                    "Missing track",
-                    "Track URN is missing in the RPC link.",
-                ));
-            };
+                let Some(urn) = urn else {
+                    return Ok::<_, warp::Rejection>(rpc_open_response(
+                        "Missing track",
+                        "Track URN is missing in the RPC link.",
+                    ));
+                };
 
-            emit_rpc_open_to_app(&app, &urn);
+                emit_rpc_open_to_app(&app, &urn);
 
-            Ok(rpc_open_response(
-                "Opened in SoundCloud Desktop",
-                "Track was sent to the desktop app. You can return to Discord now.",
-            ))
-        });
+                Ok(rpc_open_response(
+                    "Opened in SoundCloud Desktop",
+                    "Track was sent to the desktop app. You can return to Discord now.",
+                ))
+            },
+        );
 
     let rpc_pixel_route = warp::path!("rpc" / "pixel")
         .and(warp::query::<HashMap<String, String>>())
         .and(with_app_handle(rpc_pixel_app))
-        .and_then(|query: HashMap<String, String>, app: tauri::AppHandle| async move {
-            let urn = query
-                .get("urn")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
+        .and_then(
+            |query: HashMap<String, String>, app: tauri::AppHandle| async move {
+                let urn = query
+                    .get("urn")
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
 
-            if let Some(urn) = urn {
-                emit_rpc_open_to_app(&app, &urn);
-            }
+                if let Some(urn) = urn {
+                    emit_rpc_open_to_app(&app, &urn);
+                }
 
-            Ok::<_, warp::Rejection>(
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "image/png")
-                    .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body(Body::from(transparent_png_bytes().to_vec()))
-                    .unwrap(),
-            )
-        });
+                Ok::<_, warp::Rejection>(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "image/png")
+                        .header("Cache-Control", "no-store")
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(Body::from(transparent_png_bytes().to_vec()))
+                        .unwrap(),
+                )
+            },
+        );
 
-    let routes = wallpaper_route.or(rpc_open_route).or(rpc_pixel_route).with(cors());
+    let routes = wallpaper_route
+        .or(rpc_open_route)
+        .or(rpc_pixel_route)
+        .with(cors());
 
     let preferred_addr: SocketAddr = ([127, 0, 0, 1], PREFERRED_STATIC_PORT).into();
     let addr = match warp::serve(routes.clone()).try_bind_ephemeral(preferred_addr) {

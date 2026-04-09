@@ -5,13 +5,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use rustfft::{FftPlanner, num_complex::Complex};
 use biquad::{Biquad, Coefficients, DirectForm1, Hertz, ToHertz, Type, Q_BUTTERWORTH_F64};
 use rodio::mixer::Mixer;
 use rodio::source::SeekError;
 use rodio::stream::DeviceSinkBuilder;
 use rodio::{Decoder, Player, Source};
+use rustfft::{num_complex::Complex, FftPlanner};
 use sha2::{Digest, Sha256};
+use soundtouch::{Setting as SoundTouchSetting, SoundTouch};
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata as SmtcMetadata, MediaPlayback, MediaPosition,
     PlatformConfig,
@@ -38,6 +39,12 @@ const NORMALIZATION_MAX_ATTENUATION_DB: f64 = -8.0;
 const NORMALIZATION_CACHE_VERSION: u8 = 2;
 const MAX_SEEK_FALLBACK_SOURCE_BYTES: usize = 12 * 1024 * 1024;
 const CROSSFADE_HEADROOM: f32 = 0.88;
+const PLAYBACK_RATE_MIN: f32 = 0.5;
+const PLAYBACK_RATE_MAX: f32 = 2.0;
+const PITCH_SEMITONES_MIN: f32 = -12.0;
+const PITCH_SEMITONES_MAX: f32 = 12.0;
+const PITCH_SOURCE_INPUT_FRAMES: usize = 1024;
+const PITCH_SOURCE_OUTPUT_FRAMES: usize = 2048;
 
 type ChannelCount = NonZero<u16>;
 type SampleRate = NonZero<u32>;
@@ -54,6 +61,20 @@ impl Default for EqParams {
         Self {
             enabled: false,
             gains: [0.0; EQ_BANDS],
+        }
+    }
+}
+
+pub struct PitchParams {
+    pub semitones: f32,
+    pub playback_rate: f32,
+}
+
+impl Default for PitchParams {
+    fn default() -> Self {
+        Self {
+            semitones: 0.0,
+            playback_rate: 1.0,
         }
     }
 }
@@ -94,8 +115,7 @@ impl<S: Source<Item = f32>> EqSource<S> {
                     EQ_Q
                 };
                 let coeffs =
-                    Coefficients::<f64>::from_params(filter_type, fs, EQ_FREQS[i].hz(), q)
-                        .unwrap();
+                    Coefficients::<f64>::from_params(filter_type, fs, EQ_FREQS[i].hz(), q).unwrap();
                 DirectForm1::<f64>::new(coeffs)
             })
         };
@@ -237,6 +257,197 @@ impl<S: Source<Item = f32>> Source for GainSource<S> {
     }
 }
 
+struct PitchSource<S: Source<Item = f32>> {
+    source: S,
+    params: Arc<RwLock<PitchParams>>,
+    soundtouch: SoundTouch,
+    channels: ChannelCount,
+    sample_rate: SampleRate,
+    current_semitones: f32,
+    current_playback_rate: f32,
+    input_buffer: Vec<f32>,
+    output_buffer: Vec<f32>,
+    output_pos: usize,
+    source_finished: bool,
+    flushed: bool,
+}
+
+impl<S: Source<Item = f32>> PitchSource<S> {
+    fn new(source: S, params: Arc<RwLock<PitchParams>>) -> Self {
+        let channels = source.channels();
+        let sample_rate = source.sample_rate();
+        let (initial_semitones, initial_playback_rate) = params
+            .try_read()
+            .ok()
+            .map(|pitch| (pitch.semitones, pitch.playback_rate))
+            .unwrap_or((0.0, 1.0));
+
+        let mut soundtouch = SoundTouch::new();
+        soundtouch
+            .set_channels(channels.get() as u32)
+            .set_sample_rate(sample_rate.get())
+            .set_tempo(initial_playback_rate as f64)
+            .set_pitch(pitch_ratio_from_semitones(initial_semitones))
+            .set_setting(SoundTouchSetting::UseQuickseek, 1)
+            .set_setting(SoundTouchSetting::UseAaFilter, 1);
+
+        Self {
+            source,
+            params,
+            soundtouch,
+            channels,
+            sample_rate,
+            current_semitones: initial_semitones,
+            current_playback_rate: initial_playback_rate,
+            input_buffer: Vec::with_capacity(PITCH_SOURCE_INPUT_FRAMES * channels.get() as usize),
+            output_buffer: Vec::with_capacity(PITCH_SOURCE_OUTPUT_FRAMES * channels.get() as usize),
+            output_pos: 0,
+            source_finished: false,
+            flushed: false,
+        }
+    }
+
+    fn reset_processing_state(&mut self) {
+        self.soundtouch.clear();
+        self.input_buffer.clear();
+        self.output_buffer.clear();
+        self.output_pos = 0;
+        self.flushed = false;
+    }
+
+    fn refresh_processing_params(&mut self) {
+        let (next_semitones, next_playback_rate) = self
+            .params
+            .try_read()
+            .ok()
+            .map(|pitch| (pitch.semitones, pitch.playback_rate))
+            .unwrap_or((self.current_semitones, self.current_playback_rate));
+
+        if (next_semitones - self.current_semitones).abs() < 0.001
+            && (next_playback_rate - self.current_playback_rate).abs() < 0.001
+        {
+            return;
+        }
+
+        if is_identity_processing(next_playback_rate, next_semitones)
+            != is_identity_processing(self.current_playback_rate, self.current_semitones)
+        {
+            self.reset_processing_state();
+        } else {
+            self.output_buffer.clear();
+            self.output_pos = 0;
+        }
+
+        self.soundtouch.set_tempo(next_playback_rate as f64);
+        self.soundtouch
+            .set_pitch(pitch_ratio_from_semitones(next_semitones));
+        self.current_semitones = next_semitones;
+        self.current_playback_rate = next_playback_rate;
+    }
+
+    fn fill_output_buffer(&mut self) -> bool {
+        let channels = self.channels.get() as usize;
+
+        loop {
+            self.refresh_processing_params();
+
+            if self.output_pos < self.output_buffer.len() {
+                return true;
+            }
+
+            self.output_buffer.clear();
+            self.output_pos = 0;
+            self.output_buffer
+                .resize(PITCH_SOURCE_OUTPUT_FRAMES * channels, 0.0);
+
+            let received = self
+                .soundtouch
+                .receive_samples(&mut self.output_buffer, PITCH_SOURCE_OUTPUT_FRAMES);
+
+            if received > 0 {
+                self.output_buffer.truncate(received * channels);
+                return true;
+            }
+
+            self.output_buffer.clear();
+
+            if self.source_finished {
+                if !self.flushed {
+                    if self.soundtouch.num_unprocessed_samples() > 0 {
+                        self.soundtouch.flush();
+                    }
+                    self.flushed = true;
+                    continue;
+                }
+
+                return false;
+            }
+
+            self.input_buffer.clear();
+
+            for _ in 0..(PITCH_SOURCE_INPUT_FRAMES * channels) {
+                match self.source.next() {
+                    Some(sample) => self.input_buffer.push(sample),
+                    None => {
+                        self.source_finished = true;
+                        break;
+                    }
+                }
+            }
+
+            if !self.input_buffer.is_empty() {
+                self.soundtouch
+                    .put_samples(&self.input_buffer, self.input_buffer.len() / channels);
+            }
+        }
+    }
+}
+
+impl<S: Source<Item = f32>> Iterator for PitchSource<S> {
+    type Item = f32;
+
+    #[inline]
+    fn next(&mut self) -> Option<f32> {
+        self.refresh_processing_params();
+
+        if is_identity_processing(self.current_playback_rate, self.current_semitones) {
+            return self.source.next();
+        }
+
+        if !self.fill_output_buffer() {
+            return None;
+        }
+
+        let sample = self.output_buffer.get(self.output_pos).copied();
+        self.output_pos += 1;
+        sample
+    }
+}
+
+impl<S: Source<Item = f32>> Source for PitchSource<S> {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> ChannelCount {
+        self.channels
+    }
+    fn sample_rate(&self) -> SampleRate {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.source.total_duration()
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        self.source.try_seek(pos)?;
+        self.reset_processing_state();
+        self.current_semitones = f32::NAN;
+        self.current_playback_rate = f32::NAN;
+        self.refresh_processing_params();
+        self.source_finished = false;
+        Ok(())
+    }
+}
+
 /* ── Visualizer Source ─────────────────────────────────────── */
 
 const FFT_SIZE: usize = 2048;
@@ -273,11 +484,21 @@ impl<S: Source<Item = f32>> Iterator for AnalyzerSource<S> {
 }
 
 impl<S: Source<Item = f32>> Source for AnalyzerSource<S> {
-    fn current_span_len(&self) -> Option<usize> { self.source.current_span_len() }
-    fn channels(&self) -> ChannelCount { self.source.channels() }
-    fn sample_rate(&self) -> SampleRate { self.source.sample_rate() }
-    fn total_duration(&self) -> Option<Duration> { self.source.total_duration() }
-    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> { self.source.try_seek(pos) }
+    fn current_span_len(&self) -> Option<usize> {
+        self.source.current_span_len()
+    }
+    fn channels(&self) -> ChannelCount {
+        self.source.channels()
+    }
+    fn sample_rate(&self) -> SampleRate {
+        self.source.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.source.total_duration()
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        self.source.try_seek(pos)
+    }
 }
 
 /* ── OGG/Opus Source ───────────────────────────────────────── */
@@ -348,10 +569,7 @@ impl OpusSource {
                     }
                     let ch = self.channels.get() as usize;
                     let mut buf = vec![0f32; 5760 * ch];
-                    match self
-                        .decoder
-                        .decode_float(Some(&pkt.data), &mut buf, false)
-                    {
+                    match self.decoder.decode_float(Some(&pkt.data), &mut buf, false) {
                         Ok(samples_per_ch) => {
                             let total = samples_per_ch * ch;
                             buf.truncate(total);
@@ -418,10 +636,11 @@ impl Source for OpusSource {
                     audiopus::Channels::Stereo
                 };
                 self.decoder =
-                    audiopus::coder::Decoder::new(audiopus::SampleRate::Hz48000, opus_ch)
-                        .map_err(|_| SeekError::NotSupported {
+                    audiopus::coder::Decoder::new(audiopus::SampleRate::Hz48000, opus_ch).map_err(
+                        |_| SeekError::NotSupported {
                             underlying_source: "opus decoder reinit failed",
-                        })?;
+                        },
+                    )?;
                 self.buffer.clear();
                 self.buf_pos = 0;
                 self.samples_skipped = self.pre_skip;
@@ -443,7 +662,10 @@ fn normalization_cache_file(cache_dir: &Path, cache_key: &str) -> PathBuf {
     cache_dir.join(format!("{hash}.gain"))
 }
 
-fn read_cached_normalization_gain(cache_dir: Option<&Path>, cache_key: Option<&str>) -> Option<f32> {
+fn read_cached_normalization_gain(
+    cache_dir: Option<&Path>,
+    cache_key: Option<&str>,
+) -> Option<f32> {
     let path = normalization_cache_file(cache_dir?, cache_key?);
     let raw = std::fs::read_to_string(path).ok()?;
     let (version, value) = raw.trim().split_once(':')?;
@@ -454,8 +676,12 @@ fn read_cached_normalization_gain(cache_dir: Option<&Path>, cache_key: Option<&s
 }
 
 fn write_cached_normalization_gain(cache_dir: Option<&Path>, cache_key: Option<&str>, gain: f32) {
-    let Some(cache_dir) = cache_dir else { return; };
-    let Some(cache_key) = cache_key else { return; };
+    let Some(cache_dir) = cache_dir else {
+        return;
+    };
+    let Some(cache_key) = cache_key else {
+        return;
+    };
 
     if std::fs::create_dir_all(cache_dir).is_err() {
         return;
@@ -548,33 +774,43 @@ fn create_player_from_bytes(
     bytes: &[u8],
     mixer: &Mixer,
     volume: f32,
+    playback_speed: f32,
     normalization_gain: f32,
     eq_params: Arc<RwLock<EqParams>>,
+    pitch_params: Arc<RwLock<PitchParams>>,
     vis_tx: Option<std::sync::mpsc::SyncSender<Vec<f32>>>,
 ) -> Result<(Player, Option<f64>), String> {
+    let playback_speed = playback_speed.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX);
+    if let Ok(mut params) = pitch_params.write() {
+        params.playback_rate = playback_speed;
+    }
+
     let player = Player::connect_new(mixer);
     player.set_volume(volume.clamp(0.0, 2.0));
+    player.set_speed(1.0);
 
     let duration;
     if let Ok(source) = Decoder::new(Cursor::new(bytes.to_vec())) {
         duration = source.total_duration().map(|d| d.as_secs_f64());
         let gain_source = GainSource::new(source, normalization_gain);
         let eq_source = EqSource::new(gain_source, eq_params);
+        let pitch_source = PitchSource::new(eq_source, pitch_params.clone());
         if let Some(ref tx) = vis_tx {
-            player.append(AnalyzerSource::new(eq_source, tx.clone()));
+            player.append(AnalyzerSource::new(pitch_source, tx.clone()));
         } else {
-            player.append(eq_source);
+            player.append(pitch_source);
         }
     } else {
-        let source = OpusSource::new(bytes.to_vec())
-            .map_err(|e| format!("Failed to decode: {}", e))?;
+        let source =
+            OpusSource::new(bytes.to_vec()).map_err(|e| format!("Failed to decode: {}", e))?;
         duration = source.total_duration().map(|d| d.as_secs_f64());
         let gain_source = GainSource::new(source, normalization_gain);
         let eq_source = EqSource::new(gain_source, eq_params);
+        let pitch_source = PitchSource::new(eq_source, pitch_params.clone());
         if let Some(ref tx) = vis_tx {
-            player.append(AnalyzerSource::new(eq_source, tx.clone()));
+            player.append(AnalyzerSource::new(pitch_source, tx.clone()));
         } else {
-            player.append(eq_source);
+            player.append(pitch_source);
         }
     }
 
@@ -605,14 +841,23 @@ enum AudioThreadCmd {
     Reconnect,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct PositionAnchor {
+    timeline_secs: f64,
+    output_secs: f64,
+}
+
 pub struct AudioState {
     player: Mutex<Option<Arc<Player>>>,
     crossfade_player: Mutex<Option<Arc<Player>>>,
     mixer: Arc<Mutex<Mixer>>,
     eq_params: Arc<RwLock<EqParams>>,
+    pitch_params: Arc<RwLock<PitchParams>>,
     normalization_enabled: AtomicBool,
     normalization_gain: Mutex<f32>,
     volume: Mutex<f32>, // 0.0 - 2.0
+    playback_speed: Mutex<f32>,
+    position_anchor: Mutex<PositionAnchor>,
     has_track: AtomicBool,
     ended_notified: AtomicBool,
     /// Set by error callback when stream breaks, cleared after reconnect completes
@@ -646,7 +891,9 @@ fn current_event_interval_ms(state: &AudioState) -> u64 {
 }
 
 pub fn set_framerate_config(state: &AudioState, target: u32, unlocked: bool) {
-    state.frame_target.store(clamp_target_fps(target), Ordering::Relaxed);
+    state
+        .frame_target
+        .store(clamp_target_fps(target), Ordering::Relaxed);
     state.frame_unlocked.store(unlocked, Ordering::Relaxed);
 }
 
@@ -734,8 +981,8 @@ pub fn init() -> AudioState {
                             }
                             Err(e) => {
                                 // Fallback to default
-                                device_sink =
-                                    open_device_sink(None, &cmd_tx, &error_flag).expect("no audio output device");
+                                device_sink = open_device_sink(None, &cmd_tx, &error_flag)
+                                    .expect("no audio output device");
                                 *shared_mixer.lock().unwrap() = device_sink.mixer().clone();
                                 reply.send(Err(e)).ok();
                             }
@@ -757,8 +1004,8 @@ pub fn init() -> AudioState {
                             Err(e) => {
                                 eprintln!("[audio] reconnect failed: {e}, retrying...");
                                 std::thread::sleep(Duration::from_secs(1));
-                                device_sink =
-                                    open_device_sink(None, &cmd_tx, &error_flag).expect("no audio output device");
+                                device_sink = open_device_sink(None, &cmd_tx, &error_flag)
+                                    .expect("no audio output device");
                                 *shared_mixer.lock().unwrap() = device_sink.mixer().clone();
                                 reconnected.store(true, Ordering::Relaxed);
                             }
@@ -777,9 +1024,12 @@ pub fn init() -> AudioState {
         crossfade_player: Mutex::new(None),
         mixer: shared_mixer,
         eq_params: Arc::new(RwLock::new(EqParams::default())),
+        pitch_params: Arc::new(RwLock::new(PitchParams::default())),
         normalization_enabled: AtomicBool::new(true),
         normalization_gain: Mutex::new(1.0),
         volume: Mutex::new(0.25), // 50/200
+        playback_speed: Mutex::new(1.0),
+        position_anchor: Mutex::new(PositionAnchor::default()),
         has_track: AtomicBool::new(false),
         ended_notified: AtomicBool::new(false),
         device_error: device_error_flag,
@@ -827,7 +1077,10 @@ pub fn start_tick_emitter(app: &AppHandle) {
                         handle.emit("audio:ended", ()).ok();
                     }
                 } else {
-                    let pos = p.get_pos().as_secs_f64();
+                    let playback_speed = *state.playback_speed.lock().unwrap();
+                    let anchor = *state.position_anchor.lock().unwrap();
+                    let pos = timeline_position_from_output(p.get_pos(), anchor, playback_speed)
+                        .as_secs_f64();
                     handle.emit("audio:tick", pos).ok();
                 }
             }
@@ -853,17 +1106,15 @@ pub fn start_media_controls(app: &AppHandle) {
             #[cfg(target_os = "windows")]
             let hwnd = {
                 use tauri::Manager;
-                handle
-                    .get_webview_window("main")
-                    .and_then(|w| {
-                        use raw_window_handle::HasWindowHandle;
-                        w.window_handle().ok().and_then(|wh| match wh.as_raw() {
-                            raw_window_handle::RawWindowHandle::Win32(h) => {
-                                Some(h.hwnd.get() as *mut std::ffi::c_void)
-                            }
-                            _ => None,
-                        })
+                handle.get_webview_window("main").and_then(|w| {
+                    use raw_window_handle::HasWindowHandle;
+                    w.window_handle().ok().and_then(|wh| match wh.as_raw() {
+                        raw_window_handle::RawWindowHandle::Win32(h) => {
+                            Some(h.hwnd.get() as *mut std::ffi::c_void)
+                        }
+                        _ => None,
                     })
+                })
             };
 
             let config = PlatformConfig {
@@ -882,35 +1133,33 @@ pub fn start_media_controls(app: &AppHandle) {
 
             let event_handle = handle.clone();
             controls
-                .attach(move |event: MediaControlEvent| {
-                    match event {
-                        MediaControlEvent::Play => {
-                            event_handle.emit("media:play", ()).ok();
-                        }
-                        MediaControlEvent::Pause => {
-                            event_handle.emit("media:pause", ()).ok();
-                        }
-                        MediaControlEvent::Toggle => {
-                            event_handle.emit("media:toggle", ()).ok();
-                        }
-                        MediaControlEvent::Next => {
-                            event_handle.emit("media:next", ()).ok();
-                        }
-                        MediaControlEvent::Previous => {
-                            event_handle.emit("media:prev", ()).ok();
-                        }
-                        MediaControlEvent::SetPosition(MediaPosition(pos)) => {
-                            event_handle.emit("media:seek", pos.as_secs_f64()).ok();
-                        }
-                        MediaControlEvent::Seek(dir) => {
-                            let offset = match dir {
-                                souvlaki::SeekDirection::Forward => 10.0,
-                                souvlaki::SeekDirection::Backward => -10.0,
-                            };
-                            event_handle.emit("media:seek-relative", offset).ok();
-                        }
-                        _ => {}
+                .attach(move |event: MediaControlEvent| match event {
+                    MediaControlEvent::Play => {
+                        event_handle.emit("media:play", ()).ok();
                     }
+                    MediaControlEvent::Pause => {
+                        event_handle.emit("media:pause", ()).ok();
+                    }
+                    MediaControlEvent::Toggle => {
+                        event_handle.emit("media:toggle", ()).ok();
+                    }
+                    MediaControlEvent::Next => {
+                        event_handle.emit("media:next", ()).ok();
+                    }
+                    MediaControlEvent::Previous => {
+                        event_handle.emit("media:prev", ()).ok();
+                    }
+                    MediaControlEvent::SetPosition(MediaPosition(pos)) => {
+                        event_handle.emit("media:seek", pos.as_secs_f64()).ok();
+                    }
+                    MediaControlEvent::Seek(dir) => {
+                        let offset = match dir {
+                            souvlaki::SeekDirection::Forward => 10.0,
+                            souvlaki::SeekDirection::Backward => -10.0,
+                        };
+                        event_handle.emit("media:seek-relative", offset).ok();
+                    }
+                    _ => {}
                 })
                 .ok();
 
@@ -939,12 +1188,16 @@ pub fn start_media_controls(app: &AppHandle) {
                     }
                     Ok(MediaCmd::SetPlaying(playing)) => {
                         let state = handle.state::<AudioState>();
+                        let playback_speed = *state.playback_speed.lock().unwrap();
+                        let anchor = *state.position_anchor.lock().unwrap();
                         let pos = state
                             .player
                             .lock()
                             .unwrap()
                             .as_ref()
-                            .map(|p| p.get_pos())
+                            .map(|p| {
+                                timeline_position_from_output(p.get_pos(), anchor, playback_speed)
+                            })
                             .unwrap_or_default();
                         let progress = Some(MediaPosition(pos));
                         let playback = if playing {
@@ -990,6 +1243,71 @@ fn effective_output_volume(_state: &AudioState, base_volume: f32) -> f32 {
     base_volume.clamp(0.0, 2.0)
 }
 
+fn clamp_playback_rate(value: f64) -> f32 {
+    (value as f32).clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX)
+}
+
+fn clamp_pitch_semitones(value: f64) -> f32 {
+    (value as f32).clamp(PITCH_SEMITONES_MIN, PITCH_SEMITONES_MAX)
+}
+
+fn is_neutral_pitch_semitones(semitones: f32) -> bool {
+    semitones.abs() < 0.001
+}
+
+fn is_default_playback_rate(playback_speed: f32) -> bool {
+    (playback_speed - 1.0).abs() < 0.001
+}
+
+fn is_identity_processing(playback_speed: f32, semitones: f32) -> bool {
+    is_default_playback_rate(playback_speed) && is_neutral_pitch_semitones(semitones)
+}
+
+fn effective_playback_rate(playback_speed: f32) -> f64 {
+    playback_speed.clamp(PLAYBACK_RATE_MIN, PLAYBACK_RATE_MAX) as f64
+}
+
+fn timeline_position_from_output(
+    output_position: Duration,
+    anchor: PositionAnchor,
+    playback_speed: f32,
+) -> Duration {
+    let output_secs = output_position.as_secs_f64();
+    let delta_output_secs = (output_secs - anchor.output_secs).max(0.0);
+    Duration::from_secs_f64(
+        (anchor.timeline_secs + delta_output_secs * effective_playback_rate(playback_speed))
+            .max(0.0),
+    )
+}
+
+fn timeline_position_secs_for_output(
+    output_position: Duration,
+    anchor: PositionAnchor,
+    playback_speed: f32,
+) -> f64 {
+    timeline_position_from_output(output_position, anchor, playback_speed).as_secs_f64()
+}
+
+fn set_position_anchor(state: &AudioState, timeline_secs: f64, output_secs: f64) {
+    *state.position_anchor.lock().unwrap() = PositionAnchor {
+        timeline_secs: timeline_secs.max(0.0),
+        output_secs: output_secs.max(0.0),
+    };
+}
+
+fn rebase_position_anchor(state: &AudioState, output_position: Duration, playback_speed: f32) {
+    let output_secs = output_position.as_secs_f64();
+    let current_timeline_secs = {
+        let anchor = *state.position_anchor.lock().unwrap();
+        timeline_position_secs_for_output(output_position, anchor, playback_speed)
+    };
+    set_position_anchor(state, current_timeline_secs, output_secs);
+}
+
+fn pitch_ratio_from_semitones(semitones: f32) -> f64 {
+    2f64.powf((semitones as f64) / 12.0)
+}
+
 fn store_seek_fallback_bytes(state: &AudioState, bytes: Vec<u8>) {
     if bytes.len() <= MAX_SEEK_FALLBACK_SOURCE_BYTES {
         *state.source_bytes.lock().unwrap() = Some(bytes);
@@ -1007,11 +1325,11 @@ pub fn audio_load_file(
     app: tauri::AppHandle,
     state: tauri::State<'_, AudioState>,
 ) -> Result<AudioLoadResult, String> {
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
 
     let mixer = state.mixer.lock().unwrap().clone();
     let vol = *state.volume.lock().unwrap();
+    let playback_speed = *state.playback_speed.lock().unwrap();
     let normalization_cache_dir = app
         .path()
         .app_cache_dir()
@@ -1030,8 +1348,10 @@ pub fn audio_load_file(
         &bytes,
         &mixer,
         vol,
+        playback_speed,
         normalization_gain,
         state.eq_params.clone(),
+        state.pitch_params.clone(),
         state.visualizer_tx.lock().unwrap().clone(),
     )?;
     let new_player = Arc::new(new_player);
@@ -1054,10 +1374,10 @@ pub fn audio_load_file(
                 if let Some(old_cf) = cf_lock.take() {
                     old_cf.stop();
                 }
-                
+
                 new_player.set_volume(0.0);
                 *cf_lock = Some(old_player.clone());
-                
+
                 let cf_player = old_player.clone();
                 let np_player = new_player.clone();
                 let steps = (cf_duration * 1000.0 / 20.0) as u32;
@@ -1089,6 +1409,7 @@ pub fn audio_load_file(
     }
 
     *state.player.lock().unwrap() = Some(new_player);
+    set_position_anchor(&state, 0.0, 0.0);
     store_seek_fallback_bytes(&state, bytes);
     state.has_track.store(true, Ordering::Relaxed);
     state.ended_notified.store(false, Ordering::Relaxed);
@@ -1158,6 +1479,7 @@ pub async fn audio_load_url(
     // Decode and play
     let mixer = state.mixer.lock().unwrap().clone();
     let vol = *state.volume.lock().unwrap();
+    let playback_speed = *state.playback_speed.lock().unwrap();
     let normalization_cache_dir = app
         .path()
         .app_cache_dir()
@@ -1176,8 +1498,10 @@ pub async fn audio_load_url(
         &bytes,
         &mixer,
         vol,
+        playback_speed,
         normalization_gain,
         state.eq_params.clone(),
+        state.pitch_params.clone(),
         state.visualizer_tx.lock().unwrap().clone(),
     )?;
     let new_player = Arc::new(new_player);
@@ -1200,10 +1524,10 @@ pub async fn audio_load_url(
                 if let Some(old_cf) = cf_lock.take() {
                     old_cf.stop();
                 }
-                
+
                 new_player.set_volume(0.0);
                 *cf_lock = Some(old_player.clone());
-                
+
                 let cf_player = old_player.clone();
                 let np_player = new_player.clone();
                 let steps = (cf_duration * 1000.0 / 20.0) as u32;
@@ -1247,6 +1571,7 @@ pub async fn audio_load_url(
     }
 
     *state.player.lock().unwrap() = Some(new_player);
+    set_position_anchor(&state, 0.0, 0.0);
     store_seek_fallback_bytes(&state, bytes);
     state.has_track.store(true, Ordering::Relaxed);
     state.ended_notified.store(false, Ordering::Relaxed);
@@ -1295,6 +1620,7 @@ pub fn audio_stop(state: tauri::State<'_, AudioState>) {
     if let Ok(mut bytes) = state.source_bytes.try_lock() {
         *bytes = None;
     }
+    set_position_anchor(&state, 0.0, 0.0);
 }
 
 #[tauri::command]
@@ -1313,13 +1639,16 @@ pub fn audio_seek(position: f64, state: tauri::State<'_, AudioState>) -> Result<
     let _seek_guard = SeekInProgressGuard { state: &state };
     state.ended_notified.store(true, Ordering::Relaxed);
 
-    let target = Duration::from_secs_f64(position);
+    let playback_speed = *state.playback_speed.lock().unwrap();
+    let target_secs = position.max(0.0);
+    let target = Duration::from_secs_f64(target_secs);
 
     // Try normal seek first
     {
         let player = state.player.lock().unwrap();
         if let Some(ref p) = *player {
             if p.try_seek(target).is_ok() {
+                set_position_anchor(&state, target_secs, target_secs);
                 state.ended_notified.store(false, Ordering::Relaxed);
                 state.has_track.store(true, Ordering::Relaxed);
                 state.device_error.store(false, Ordering::Relaxed);
@@ -1345,12 +1674,14 @@ pub fn audio_seek(position: f64, state: tauri::State<'_, AudioState>) -> Result<
         &bytes,
         &mixer,
         vol,
+        playback_speed,
         normalization_gain,
         state.eq_params.clone(),
+        state.pitch_params.clone(),
         state.visualizer_tx.lock().unwrap().clone(),
     )?;
 
-    if position > 0.0 {
+    if target_secs > 0.0 {
         new_player.try_seek(target).ok();
     }
 
@@ -1371,6 +1702,7 @@ pub fn audio_seek(position: f64, state: tauri::State<'_, AudioState>) -> Result<
         old_cf.stop();
     }
     *player = Some(Arc::new(new_player));
+    set_position_anchor(&state, target_secs, target_secs);
     state.ended_notified.store(false, Ordering::Relaxed);
     state.has_track.store(true, Ordering::Relaxed);
     state.device_error.store(false, Ordering::Relaxed);
@@ -1394,13 +1726,41 @@ pub fn audio_set_volume(volume: f64, state: tauri::State<'_, AudioState>) {
 }
 
 #[tauri::command]
+pub fn audio_set_playback_rate(playback_rate: f64, state: tauri::State<'_, AudioState>) {
+    let rate = clamp_playback_rate(playback_rate);
+    let previous_rate = *state.playback_speed.lock().unwrap();
+
+    if (rate - previous_rate).abs() >= 0.001 {
+        if let Some(ref p) = *state.player.lock().unwrap() {
+            rebase_position_anchor(&state, p.get_pos(), previous_rate);
+        }
+    }
+
+    *state.playback_speed.lock().unwrap() = rate;
+
+    if let Ok(mut params) = state.pitch_params.write() {
+        params.playback_rate = rate;
+    }
+}
+
+#[tauri::command]
+pub fn audio_set_pitch(pitch_semitones: f64, state: tauri::State<'_, AudioState>) {
+    let semitones = clamp_pitch_semitones(pitch_semitones);
+    if let Ok(mut params) = state.pitch_params.write() {
+        params.semitones = semitones;
+    }
+}
+
+#[tauri::command]
 pub fn audio_get_position(state: tauri::State<'_, AudioState>) -> f64 {
+    let playback_speed = *state.playback_speed.lock().unwrap();
+    let anchor = *state.position_anchor.lock().unwrap();
     state
         .player
         .lock()
         .unwrap()
         .as_ref()
-        .map(|p| p.get_pos().as_secs_f64())
+        .map(|p| timeline_position_from_output(p.get_pos(), anchor, playback_speed).as_secs_f64())
         .unwrap_or(0.0)
 }
 
@@ -1416,7 +1776,9 @@ pub fn audio_set_eq(enabled: bool, gains: Vec<f64>, state: tauri::State<'_, Audi
 
 #[tauri::command]
 pub fn audio_set_normalization(enabled: bool, state: tauri::State<'_, AudioState>) {
-    state.normalization_enabled.store(enabled, Ordering::Relaxed);
+    state
+        .normalization_enabled
+        .store(enabled, Ordering::Relaxed);
     let vol = *state.volume.lock().unwrap();
     if let Some(ref p) = *state.player.lock().unwrap() {
         p.set_volume(effective_output_volume(&state, vol));
@@ -1472,7 +1834,7 @@ pub fn audio_set_media_position(position: f64, state: tauri::State<'_, AudioStat
 /// Audio sink info from PulseAudio/PipeWire
 #[derive(serde::Serialize, Clone)]
 pub struct AudioSink {
-    pub name: String,        // internal name for pactl
+    pub name: String, // internal name for pactl
     pub display_name: String,
     pub description: String, // human-readable
     pub is_default: bool,
@@ -1584,7 +1946,7 @@ pub fn audio_switch_device(
     #[cfg(not(target_os = "linux"))]
     let switch_name: Option<String> = device_name;
 
-     // Stop current playback
+    // Stop current playback
     {
         let mut player = state.player.lock().unwrap();
         if let Some(old) = player.take() {
@@ -1609,7 +1971,7 @@ pub fn audio_switch_device(
         })
         .map_err(|e| e.to_string())?;
 
-     let new_mixer = reply_rx
+    let new_mixer = reply_rx
         .recv_timeout(Duration::from_secs(4))
         .map_err(|e| format!("Device switch timed out: {}", e))?
         .map_err(|e| e)?;
@@ -1621,10 +1983,7 @@ pub fn audio_switch_device(
 /* ── Track Download ───────────────────────────────────────── */
 
 #[tauri::command]
-pub async fn save_track_to_path(
-    cache_path: String,
-    dest_path: String,
-) -> Result<String, String> {
+pub async fn save_track_to_path(cache_path: String, dest_path: String) -> Result<String, String> {
     tokio::fs::copy(&cache_path, &dest_path)
         .await
         .map_err(|e| format!("Copy failed: {}", e))?;
@@ -1648,7 +2007,7 @@ pub fn start_visualizer_thread(app: &AppHandle) {
             let fft = planner.plan_fft_forward(FFT_SIZE);
             let mut complex_buffer = vec![Complex { re: 0.0, im: 0.0 }; FFT_SIZE];
             let mut window = vec![0.0f32; FFT_SIZE];
-            
+
             use std::f32::consts::PI;
             for i in 0..FFT_SIZE {
                 window[i] = 0.5 * (1.0 - (2.0 * PI * i as f32 / (FFT_SIZE as f32 - 1.0)).cos());
@@ -1659,14 +2018,17 @@ pub fn start_visualizer_thread(app: &AppHandle) {
                 if !state.window_visible.load(Ordering::Relaxed) {
                     continue;
                 }
-                if last_emit_at.elapsed() < Duration::from_millis(current_event_interval_ms(&state)) {
+                if last_emit_at.elapsed() < Duration::from_millis(current_event_interval_ms(&state))
+                {
                     continue;
                 }
 
                 let mut is_silent = true;
                 for i in 0..FFT_SIZE {
                     let s = samples[i];
-                    if s.abs() > 0.001 { is_silent = false; }
+                    if s.abs() > 0.001 {
+                        is_silent = false;
+                    }
                     complex_buffer[i] = Complex {
                         re: s * window[i],
                         im: 0.0,
@@ -1684,11 +2046,11 @@ pub fn start_visualizer_thread(app: &AppHandle) {
                 let mut bins = vec![0u8; 64];
                 let max_freq: f32 = 20000.0;
                 let sample_rate: f32 = 48000.0;
-                
+
                 for i in 0..64 {
                     let min_f = 20.0f32 * (max_freq / 20.0f32).powf(i as f32 / 64.0);
                     let max_f = 20.0f32 * (max_freq / 20.0f32).powf((i + 1) as f32 / 64.0);
-                    
+
                     let min_idx = ((min_f / sample_rate) * FFT_SIZE as f32) as usize;
                     let max_idx = ((max_f / sample_rate) * FFT_SIZE as f32) as usize;
                     let min_idx = min_idx.max(1).min(FFT_SIZE / 2 - 1);
@@ -1712,7 +2074,7 @@ pub fn start_visualizer_thread(app: &AppHandle) {
                     let val = (compressed * 255.0).clamp(0.0, 255.0) as u8;
                     bins[i] = val;
                 }
-                
+
                 last_emit_at = std::time::Instant::now();
                 handle.emit("audio:visualizer", bins).ok();
             }

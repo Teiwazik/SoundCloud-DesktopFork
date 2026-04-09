@@ -20,12 +20,21 @@ const DEV_LYRICS_DEBUG = import.meta.env.DEV;
 const LYRICS_MISS_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_TITLE_ONLY_ATTEMPTS = 6;
 const MAX_PRIORITY_TITLE_ONLY_ATTEMPTS = 3;
+const LYRIC_PAUSE_MARKER = '♪♪♪';
+const PAUSE_SECTION_LINE_REGEX =
+  /^(?:instrumental|interlude|solo|guitar solo|drum solo|проигрыш|проигрыши|инструментал|соло)(?:\s+(?:x|х|×)?\d+)?$/iu;
 export interface LyricLine {
   time: number;
   text: string;
 }
 
+interface PreparedLyricLine {
+  text: string;
+  isPause: boolean;
+}
+
 export type LyricsSource =
+  | 'soundcloud'
   | 'lrclib'
   | 'netease'
   | 'musixmatch'
@@ -72,7 +81,9 @@ let musixmatchTokenPromise: Promise<string | null> | null = null;
 const lyricMotionHintCache = new Map<string, LyricMotionHint[]>();
 const lyricsMissCache = new Map<string, number>();
 // Bump to drop stale pseudo-sync and low-confidence Genius cache entries.
-const LYRICS_SEARCH_CACHE_VERSION = 9;
+const LYRICS_SEARCH_CACHE_VERSION = 12;
+export const LYRICS_SEARCH_QUERY_VERSION = 13;
+const REQUIRED_TITLE_IDENTITY_TOKENS = new Set(['aac', 'flac', 'm4a', 'mp3', 'ogg', 'opus', 'wav']);
 const TITLE_HINT_NOISE_PREFIXES = [
   'acoustic',
   'audio',
@@ -259,6 +270,76 @@ function normalizePlainLyricsText(value: string): string | null {
   return plain && !isLyricsPlaceholderText(plain) ? plain : null;
 }
 
+const DESCRIPTION_SECTION_HEADER_REGEX =
+  /^\s*(?:\[[^\]]+\]|\((?:куплет|припев|бридж|verse|chorus|bridge|hook|outro|intro)[^)]+\))\s*$/imu;
+const DESCRIPTION_PROMO_MARKER_REGEX =
+  /\b(?:prod(?:uced)?\s+by|booking|bookings|follow|subscribe|pre[- ]?save|presave|out\s+now|stream\s+now|available\s+on|all\s+platforms|snippet|demo|cover\s+art|mix(?:ed)?\s+by|master(?:ed)?\s+by)\b/giu;
+const DESCRIPTION_LINK_REGEX = /(?:https?:\/\/\S+|(?:^|\s)t\.me\/\S+|(?:^|\s)vk\.com\/\S+)/giu;
+
+function hasRepeatedDescriptionPhrase(value: string): boolean {
+  const tokens = normalizeSearchText(value)
+    .split(' ')
+    .filter((token) => token.length >= 2);
+  if (tokens.length < 24) return false;
+
+  const counts = new Map<string, number>();
+  for (let index = 0; index <= tokens.length - 4; index += 1) {
+    const gramTokens = tokens.slice(index, index + 4);
+    if (gramTokens.some((token) => token.length < 2)) continue;
+    const gram = gramTokens.join(' ');
+    const next = (counts.get(gram) ?? 0) + 1;
+    if (next >= 2) return true;
+    counts.set(gram, next);
+  }
+
+  return false;
+}
+
+function normalizeDescriptionLyricsText(value: string): string | null {
+  const raw = normalizeLyricsTextBlock(value);
+  if (!raw) return null;
+
+  const linkMatches = raw.match(DESCRIPTION_LINK_REGEX) || [];
+  let normalized = raw
+    .replace(DESCRIPTION_LINK_REGEX, ' ')
+    .replace(/(?:^|\n)\s*(?:tg|тг|telegram|телега)\.?\s*[:\-]?\s*/giu, '\n')
+    .replace(/(?:^|\n)\s*@[\p{L}\p{N}_]{3,32}\s*$/gimu, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const lines = normalized
+    .split('\n')
+    .map((line) => normalizeLyricLineText(line))
+    .filter(Boolean);
+
+  while (
+    lines.length > 0 &&
+    (lines[0].length <= 40 || /^(?:tg|тг|telegram|телега|link|links)$/iu.test(lines[0]))
+  ) {
+    lines.shift();
+  }
+
+  normalized = lines.join('\n').trim();
+  if (!normalized) return null;
+
+  const promoHits = normalized.match(DESCRIPTION_PROMO_MARKER_REGEX)?.length ?? 0;
+  const wordCount = normalizeSearchText(normalized).split(' ').filter(Boolean).length;
+  const lineCount = normalized.split('\n').filter(Boolean).length;
+  const hasSectionHeaders = DESCRIPTION_SECTION_HEADER_REGEX.test(normalized);
+  const repeatedPhrase = hasRepeatedDescriptionPhrase(normalized);
+
+  if (promoHits >= 3) return null;
+  if (linkMatches.length > 2) return null;
+  if (wordCount < 28 || normalized.length < 150) return null;
+
+  if (!hasSectionHeaders && lineCount < 4 && !repeatedPhrase) {
+    return null;
+  }
+
+  return normalizePlainLyricsText(normalized);
+}
+
 function normalizeLyricTimeNumber(value: number): number | null {
   if (!Number.isFinite(value)) return null;
   let time = Number(value);
@@ -422,7 +503,7 @@ function normalizeSyncedLyrics(lines: LyricLine[] | null | undefined): LyricLine
   const prepared = lines
     .map((line) => ({
       time: normalizeLyricTimeNumber(Number(line?.time)),
-      text: normalizeLyricLineText(String(line?.text || '')),
+      text: normalizeSyncedLyricLineText(String(line?.text || '')),
     }))
     .filter((line): line is LyricLine => line.time != null && Boolean(line.text))
     .filter((line) => !isLikelyLyricsBoilerplateLine(line.text))
@@ -821,9 +902,19 @@ async function firstNonNull<T>(tasks: Array<() => Promise<T | null>>): Promise<T
 }
 
 async function requestText(url: string, signal?: AbortSignal): Promise<string> {
+  const isGeniusRequest = /^https:\/\/(?:www\.)?genius\.com\//i.test(url);
+  const headers = isGeniusRequest
+    ? {
+        Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+        Referer: 'https://genius.com/',
+        'User-Agent':
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+      }
+    : undefined;
   const res = isTauriRuntime()
-    ? await tauriFetch(url, { method: 'GET', signal })
-    : await fetch(url, { signal });
+    ? await tauriFetch(url, { method: 'GET', signal, headers })
+    : await fetch(url, { signal, headers });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.text();
 }
@@ -873,9 +964,64 @@ function isSectionHeader(value: string): boolean {
   return /^\[[^\]]+\]$/.test(trimmed);
 }
 
-function isIgnorableLyricLine(value: string): boolean {
-  const normalized = normalizeLyricText(value);
-  return !normalized || normalized === '...' || normalized === '♪♪♪';
+function isExplicitPauseSectionLine(value: string): boolean {
+  return PAUSE_SECTION_LINE_REGEX.test(normalizeLyricText(value));
+}
+
+function isPauseMarkerLine(value: string): boolean {
+  const trimmed = normalizeLyricsTextBlock(value).trim();
+  if (!trimmed || trimmed === '...' || trimmed === LYRIC_PAUSE_MARKER) return true;
+  return isExplicitPauseSectionLine(trimmed);
+}
+
+function normalizeSyncedLyricLineText(value: string): string {
+  const normalized = normalizeLyricLineText(value);
+  if (normalized) {
+    return isPauseMarkerLine(normalized) ? LYRIC_PAUSE_MARKER : normalized;
+  }
+  return isPauseMarkerLine(value) ? LYRIC_PAUSE_MARKER : '';
+}
+
+function buildPreparedLyricLines(plainLyrics: string): PreparedLyricLine[] {
+  const prepared: PreparedLyricLine[] = [];
+  const pushPause = () => {
+    if (prepared[prepared.length - 1]?.isPause) return;
+    prepared.push({ text: LYRIC_PAUSE_MARKER, isPause: true });
+  };
+
+  for (const rawLine of String(plainLyrics || '').split(/\r?\n/)) {
+    const trimmed = normalizeLyricsTextBlock(rawLine).trim();
+
+    if (!trimmed) {
+      pushPause();
+      continue;
+    }
+
+    if (isSectionHeader(trimmed)) {
+      if (isExplicitPauseSectionLine(trimmed)) {
+        pushPause();
+      }
+      continue;
+    }
+
+    if (isPauseMarkerLine(trimmed)) {
+      pushPause();
+      continue;
+    }
+
+    const text = normalizeLyricLineText(trimmed);
+    if (!text) {
+      pushPause();
+      continue;
+    }
+
+    prepared.push({ text, isPause: false });
+  }
+
+  while (prepared[0]?.isPause) prepared.shift();
+  while (prepared[prepared.length - 1]?.isPause) prepared.pop();
+
+  return prepared;
 }
 
 function tokenizeNormalizedText(value: string): string[] {
@@ -892,6 +1038,10 @@ function lineWeight(value: string): number {
   if (!normalized) return 1;
   const tokens = tokenizeNormalizedText(normalized);
   return Math.max(tokens.length + countVowels(normalized) * 0.12, 1);
+}
+
+function getPreparedLyricLineWeight(line: PreparedLyricLine): number {
+  return line.isPause ? 0.72 : lineWeight(line.text);
 }
 
 function estimateLyricLeadDurationSec(text: string): number {
@@ -1038,7 +1188,7 @@ function textSimilarityScore(comment: string, line: string): number {
 }
 
 function getNextSameNormalizedIndex(
-  lyricMeta: Array<{ index: number; text: string; normalized: string }>,
+  lyricMeta: Array<{ text: string; normalized: string }>,
   fromIndex: number,
 ): number | null {
   const base = lyricMeta[fromIndex]?.normalized;
@@ -1063,15 +1213,22 @@ export function buildPseudoSyncedLyrics(
   comments: TimedCommentLike[],
   trackDurationSec?: number,
 ): LyricLine[] | null {
-  const rawLines = plainLyrics
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !isSectionHeader(line));
-
-  const lyricLines = rawLines.filter(
-    (line) => !isIgnorableLyricLine(line) && line.trim().length >= 2,
-  );
-  if (lyricLines.length < 4) return null;
+  const preparedLines = buildPreparedLyricLines(plainLyrics);
+  const lyricMeta = preparedLines
+    .map((line, preparedIndex) =>
+      line.isPause
+        ? null
+        : {
+            preparedIndex,
+            text: line.text,
+            normalized: normalizeLyricText(line.text),
+          },
+    )
+    .filter(
+      (line): line is { preparedIndex: number; text: string; normalized: string } =>
+        line != null && line.text.trim().length >= 2,
+    );
+  if (lyricMeta.length < 4) return null;
 
   const preparedComments = comments
     .filter((comment) => comment.timestamp != null)
@@ -1086,27 +1243,22 @@ export function buildPseudoSyncedLyrics(
 
   if (preparedComments.length < 2) return null;
 
-  const lyricMeta = lyricLines.map((text, index) => ({
-    index,
-    text,
-    normalized: normalizeLyricText(text),
-  }));
-
-  const anchors: Array<{ lineIndex: number; timeSec: number; score: number }> = [];
-  let minLineIndex = 0;
+  const anchors: Array<{ metaIndex: number; preparedIndex: number; timeSec: number; score: number }> =
+    [];
+  let minMetaIndex = 0;
 
   for (const comment of preparedComments) {
-    let best: { lineIndex: number; score: number } | null = null;
+    let best: { metaIndex: number; score: number } | null = null;
 
-    for (let i = minLineIndex; i < lyricMeta.length; i++) {
+    for (let i = minMetaIndex; i < lyricMeta.length; i++) {
       const score = textSimilarityScore(comment.raw, lyricMeta[i].text);
       if (score < 0.42) continue;
       const duplicateIndex = getNextSameNormalizedIndex(lyricMeta, i);
       const duplicateBias = duplicateIndex != null && duplicateIndex - i <= 5 ? 0.035 : 0;
-      const distancePenalty: number = best ? Math.max(0, (i - minLineIndex - 10) * 0.01) : 0;
+      const distancePenalty: number = best ? Math.max(0, (i - minMetaIndex - 10) * 0.01) : 0;
       const total: number = score - distancePenalty - duplicateBias;
       if (!best || total > best.score) {
-        best = { lineIndex: i, score: total };
+        best = { metaIndex: i, score: total };
       }
     }
 
@@ -1114,24 +1266,25 @@ export function buildPseudoSyncedLyrics(
 
     const previous = anchors[anchors.length - 1];
     if (previous) {
-      if (best.lineIndex < previous.lineIndex) continue;
-      if (comment.timeSec <= previous.timeSec + 0.35 && best.lineIndex > previous.lineIndex)
+      if (best.metaIndex < previous.metaIndex) continue;
+      if (comment.timeSec <= previous.timeSec + 0.35 && best.metaIndex > previous.metaIndex)
         continue;
-      if (best.lineIndex === previous.lineIndex && best.score <= previous.score) continue;
+      if (best.metaIndex === previous.metaIndex && best.score <= previous.score) continue;
 
-      if (best.lineIndex === previous.lineIndex) {
-        const nextSameIndex = getNextSameNormalizedIndex(lyricMeta, previous.lineIndex);
+      if (best.metaIndex === previous.metaIndex) {
+        const nextSameIndex = getNextSameNormalizedIndex(lyricMeta, previous.metaIndex);
         if (
           nextSameIndex != null &&
-          nextSameIndex <= previous.lineIndex + 4 &&
+          nextSameIndex <= previous.metaIndex + 4 &&
           comment.timeSec > previous.timeSec + 1.6
         ) {
           anchors.push({
-            lineIndex: nextSameIndex,
+            metaIndex: nextSameIndex,
+            preparedIndex: lyricMeta[nextSameIndex].preparedIndex,
             timeSec: comment.timeSec,
             score: best.score - 0.01,
           });
-          minLineIndex = nextSameIndex;
+          minMetaIndex = nextSameIndex;
           continue;
         }
         previous.timeSec = comment.timeSec;
@@ -1139,44 +1292,50 @@ export function buildPseudoSyncedLyrics(
         continue;
       }
 
-      const previousText = lyricMeta[previous.lineIndex]?.normalized;
-      const bestText = lyricMeta[best.lineIndex]?.normalized;
+      const previousText = lyricMeta[previous.metaIndex]?.normalized;
+      const bestText = lyricMeta[best.metaIndex]?.normalized;
       if (bestText && previousText === bestText && comment.timeSec > previous.timeSec + 1.4) {
-        const nextSameIndex = getNextSameNormalizedIndex(lyricMeta, previous.lineIndex);
-        if (nextSameIndex != null && nextSameIndex <= best.lineIndex) {
+        const nextSameIndex = getNextSameNormalizedIndex(lyricMeta, previous.metaIndex);
+        if (nextSameIndex != null && nextSameIndex <= best.metaIndex) {
           anchors.push({
-            lineIndex: nextSameIndex,
+            metaIndex: nextSameIndex,
+            preparedIndex: lyricMeta[nextSameIndex].preparedIndex,
             timeSec: comment.timeSec,
             score: best.score - 0.015,
           });
-          minLineIndex = nextSameIndex;
+          minMetaIndex = nextSameIndex;
           continue;
         }
       }
     }
 
-    anchors.push({ lineIndex: best.lineIndex, timeSec: comment.timeSec, score: best.score });
-    minLineIndex = best.lineIndex;
+    anchors.push({
+      metaIndex: best.metaIndex,
+      preparedIndex: lyricMeta[best.metaIndex].preparedIndex,
+      timeSec: comment.timeSec,
+      score: best.score,
+    });
+    minMetaIndex = best.metaIndex;
   }
 
   const dedupedAnchors = anchors.filter((anchor, index) => {
     const prev = anchors[index - 1];
     if (!prev) return true;
-    if (anchor.lineIndex === prev.lineIndex && anchor.timeSec <= prev.timeSec + 0.55) return false;
+    if (anchor.metaIndex === prev.metaIndex && anchor.timeSec <= prev.timeSec + 0.55) return false;
     return true;
   });
 
   if (dedupedAnchors.length < 2) return null;
 
-  dedupedAnchors.sort((a, b) => a.timeSec - b.timeSec || a.lineIndex - b.lineIndex);
+  dedupedAnchors.sort((a, b) => a.timeSec - b.timeSec || a.metaIndex - b.metaIndex);
 
   const anchorsForTiming = dedupedAnchors;
 
   if (anchorsForTiming.length < 2) return null;
 
-  const lineTimes = new Array<number>(lyricLines.length).fill(NaN);
+  const lineTimes = new Array<number>(preparedLines.length).fill(NaN);
   for (const anchor of anchorsForTiming) {
-    lineTimes[anchor.lineIndex] = anchor.timeSec;
+    lineTimes[anchor.preparedIndex] = anchor.timeSec;
   }
 
   const distributeRange = (
@@ -1186,8 +1345,8 @@ export function buildPseudoSyncedLyrics(
     endTime: number,
   ) => {
     if (endLine <= startLine) return;
-    const segmentLines = lyricLines.slice(startLine, endLine + 1);
-    const weights = segmentLines.map(lineWeight);
+    const segmentLines = preparedLines.slice(startLine, endLine + 1);
+    const weights = segmentLines.map(getPreparedLyricLineWeight);
     const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || segmentLines.length;
     let acc = startTime;
     lineTimes[startLine] = startTime;
@@ -1204,35 +1363,38 @@ export function buildPseudoSyncedLyrics(
   for (let i = 0; i < anchorsForTiming.length - 1; i++) {
     const current = anchorsForTiming[i];
     const next = anchorsForTiming[i + 1];
-    distributeRange(current.lineIndex, current.timeSec, next.lineIndex, next.timeSec);
+    distributeRange(current.preparedIndex, current.timeSec, next.preparedIndex, next.timeSec);
   }
 
   const firstAnchor = anchorsForTiming[0];
-  const leadInWindowSec = getLeadInWindowSec(firstAnchor.timeSec, firstAnchor.lineIndex);
+  const leadInWindowSec = getLeadInWindowSec(firstAnchor.timeSec, firstAnchor.preparedIndex);
   const leadStartTime = Math.max(0, firstAnchor.timeSec - leadInWindowSec);
-  if (firstAnchor.lineIndex === 0) {
+  if (firstAnchor.preparedIndex === 0) {
     lineTimes[0] = Math.max(firstAnchor.timeSec, leadStartTime);
   } else {
-    distributeRange(0, leadStartTime, firstAnchor.lineIndex, firstAnchor.timeSec);
+    distributeRange(0, leadStartTime, firstAnchor.preparedIndex, firstAnchor.timeSec);
   }
 
   const effectiveDuration =
     trackDurationSec && Number.isFinite(trackDurationSec)
       ? Math.max(trackDurationSec, anchorsForTiming[anchorsForTiming.length - 1].timeSec + 2)
       : anchorsForTiming[anchorsForTiming.length - 1].timeSec +
-        Math.max(lyricLines.length - anchorsForTiming[anchorsForTiming.length - 1].lineIndex, 2) *
+        Math.max(
+          preparedLines.length - anchorsForTiming[anchorsForTiming.length - 1].preparedIndex,
+          2,
+        ) *
           2.4;
 
   const lastAnchor = anchorsForTiming[anchorsForTiming.length - 1];
-  let tailTime = lineTimes[lastAnchor.lineIndex];
-  for (let i = lastAnchor.lineIndex + 1; i < lyricLines.length; i++) {
-    tailTime += Math.max(0.8, lineWeight(lyricLines[i]) * 0.42);
+  let tailTime = lineTimes[lastAnchor.preparedIndex];
+  for (let i = lastAnchor.preparedIndex + 1; i < preparedLines.length; i++) {
+    tailTime += Math.max(0.8, getPreparedLyricLineWeight(preparedLines[i]) * 0.42);
     lineTimes[i] = Math.min(tailTime, Math.max(effectiveDuration - 0.35, 0));
   }
 
-  const pseudoSynced = lyricLines.map((text, index) => ({
+  const pseudoSynced = preparedLines.map((line, index) => ({
     time: Number.isFinite(lineTimes[index]) ? lineTimes[index] : index * 2.5,
-    text,
+    text: line.isPause ? LYRIC_PAUSE_MARKER : line.text,
   }));
 
   pseudoSynced.sort((a, b) => a.time - b.time);
@@ -1412,22 +1574,29 @@ function buildSyncedLyricsFromWordTimings(
   words: AsrWordTiming[],
   trackDurationSec?: number,
 ): LyricLine[] | null {
-  const rawLines = plainLyrics
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !isSectionHeader(line));
+  const preparedLines = buildPreparedLyricLines(plainLyrics);
+  const lyricMeta = preparedLines
+    .map((line, preparedIndex) =>
+      line.isPause
+        ? null
+        : {
+            preparedIndex,
+            text: line.text,
+            normalized: normalizeLyricText(line.text),
+          },
+    )
+    .filter(
+      (line): line is { preparedIndex: number; text: string; normalized: string } =>
+        line != null && line.text.trim().length >= 2,
+    );
+  if (lyricMeta.length < 4 || words.length < 4) return null;
 
-  const lyricLines = rawLines.filter(
-    (line) => !isIgnorableLyricLine(line) && line.trim().length >= 2,
-  );
-  if (lyricLines.length < 4 || words.length < 4) return null;
-
-  const anchors: Array<{ lineIndex: number; timeSec: number; score: number }> = [];
+  const anchors: Array<{ preparedIndex: number; timeSec: number; score: number }> = [];
   let cursor = 0;
 
-  for (let lineIndex = 0; lineIndex < lyricLines.length && cursor < words.length; lineIndex++) {
-    const line = lyricLines[lineIndex];
-    const lineTokens = tokenizeNormalizedText(normalizeLyricText(line));
+  for (let metaIndex = 0; metaIndex < lyricMeta.length && cursor < words.length; metaIndex++) {
+    const line = lyricMeta[metaIndex];
+    const lineTokens = tokenizeNormalizedText(line.normalized);
     if (lineTokens.length === 0) continue;
 
     let best: { start: number; end: number; score: number } | null = null;
@@ -1441,7 +1610,7 @@ function buildSyncedLyricsFromWordTimings(
         windowText = windowText ? `${windowText} ${words[end].text}` : words[end].text;
         if (end === start) continue;
 
-        const rawScore = textSimilarityScore(windowText, line);
+        const rawScore = textSimilarityScore(windowText, line.text);
         const lengthPenalty = Math.abs(end - start + 1 - lineTokens.length) * 0.012;
         const total = rawScore - lengthPenalty;
 
@@ -1455,7 +1624,7 @@ function buildSyncedLyricsFromWordTimings(
     if (!best || best.score < threshold) continue;
 
     anchors.push({
-      lineIndex,
+      preparedIndex: line.preparedIndex,
       timeSec: words[best.start].start,
       score: best.score,
     });
@@ -1464,9 +1633,9 @@ function buildSyncedLyricsFromWordTimings(
 
   if (anchors.length < 2) return null;
 
-  const lineTimes = new Array<number>(lyricLines.length).fill(NaN);
+  const lineTimes = new Array<number>(preparedLines.length).fill(NaN);
   for (const anchor of anchors) {
-    lineTimes[anchor.lineIndex] = anchor.timeSec;
+    lineTimes[anchor.preparedIndex] = anchor.timeSec;
   }
 
   const distributeRange = (
@@ -1476,8 +1645,8 @@ function buildSyncedLyricsFromWordTimings(
     endTime: number,
   ) => {
     if (endLine <= startLine) return;
-    const segmentLines = lyricLines.slice(startLine, endLine + 1);
-    const weights = segmentLines.map(lineWeight);
+    const segmentLines = preparedLines.slice(startLine, endLine + 1);
+    const weights = segmentLines.map(getPreparedLyricLineWeight);
     const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || segmentLines.length;
     let acc = startTime;
     lineTimes[startLine] = startTime;
@@ -1494,16 +1663,16 @@ function buildSyncedLyricsFromWordTimings(
   for (let i = 0; i < anchors.length - 1; i++) {
     const current = anchors[i];
     const next = anchors[i + 1];
-    distributeRange(current.lineIndex, current.timeSec, next.lineIndex, next.timeSec);
+    distributeRange(current.preparedIndex, current.timeSec, next.preparedIndex, next.timeSec);
   }
 
   const firstAnchor = anchors[0];
-  const leadInWindowSec = getLeadInWindowSec(firstAnchor.timeSec, firstAnchor.lineIndex);
+  const leadInWindowSec = getLeadInWindowSec(firstAnchor.timeSec, firstAnchor.preparedIndex);
   const leadStartTime = Math.max(0, firstAnchor.timeSec - leadInWindowSec);
-  if (firstAnchor.lineIndex === 0) {
+  if (firstAnchor.preparedIndex === 0) {
     lineTimes[0] = Math.max(firstAnchor.timeSec, leadStartTime);
   } else {
-    distributeRange(0, leadStartTime, firstAnchor.lineIndex, firstAnchor.timeSec);
+    distributeRange(0, leadStartTime, firstAnchor.preparedIndex, firstAnchor.timeSec);
   }
 
   const lastAnchor = anchors[anchors.length - 1];
@@ -1515,15 +1684,15 @@ function buildSyncedLyricsFromWordTimings(
           lastAnchor.timeSec + 2.4,
         );
 
-  let tailTime = lineTimes[lastAnchor.lineIndex];
-  for (let i = lastAnchor.lineIndex + 1; i < lyricLines.length; i++) {
-    tailTime += Math.max(0.8, lineWeight(lyricLines[i]) * 0.42);
+  let tailTime = lineTimes[lastAnchor.preparedIndex];
+  for (let i = lastAnchor.preparedIndex + 1; i < preparedLines.length; i++) {
+    tailTime += Math.max(0.8, getPreparedLyricLineWeight(preparedLines[i]) * 0.42);
     lineTimes[i] = Math.min(tailTime, Math.max(effectiveDuration - 0.35, 0));
   }
 
-  const synced = lyricLines.map((text, index) => ({
+  const synced = preparedLines.map((line, index) => ({
     time: Number.isFinite(lineTimes[index]) ? lineTimes[index] : index * 2.5,
-    text,
+    text: line.isPause ? LYRIC_PAUSE_MARKER : line.text,
   }));
 
   synced.sort((a, b) => a.time - b.time);
@@ -1541,18 +1710,13 @@ function buildWeightedSyncedLyricsFallback(
   words: AsrWordTiming[],
   trackDurationSec?: number,
 ): LyricLine[] | null {
-  const rawLines = plainLyrics
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !isSectionHeader(line));
-
-  const lyricLines = rawLines.filter(
-    (line) => !isIgnorableLyricLine(line) && line.trim().length >= 2,
-  );
-  if (lyricLines.length < 2 || words.length < 2) return null;
+  const preparedLines = buildPreparedLyricLines(plainLyrics);
+  const voicedLineCount = preparedLines.filter((line) => !line.isPause).length;
+  if (voicedLineCount < 2 || words.length < 2) return null;
 
   const totalWeight =
-    lyricLines.reduce((sum, line) => sum + lineWeight(line), 0) || lyricLines.length;
+    preparedLines.reduce((sum, line) => sum + getPreparedLyricLineWeight(line), 0) ||
+    preparedLines.length;
   const trackStart = Math.max(0, words[0]?.start ?? 0);
   const trackEndFromWords = Math.max(
     words[words.length - 1]?.end ?? trackStart + 1,
@@ -1562,13 +1726,13 @@ function buildWeightedSyncedLyricsFallback(
     trackDurationSec && Number.isFinite(trackDurationSec)
       ? Math.max(trackDurationSec - 0.2, trackEndFromWords)
       : trackEndFromWords;
-  const totalSpan = Math.max(trackEnd - trackStart, lyricLines.length * 0.35);
+  const totalSpan = Math.max(trackEnd - trackStart, preparedLines.length * 0.35);
 
   let accWeight = 0;
-  const synced = lyricLines.map((text, index) => {
+  const synced = preparedLines.map((line, index) => {
     const time = index === 0 ? trackStart : trackStart + (totalSpan * accWeight) / totalWeight;
-    accWeight += lineWeight(text);
-    return { time, text };
+    accWeight += getPreparedLyricLineWeight(line);
+    return { time, text: line.isPause ? LYRIC_PAUSE_MARKER : line.text };
   });
 
   for (let i = 1; i < synced.length; i++) {
@@ -1584,28 +1748,23 @@ function buildDurationOnlySyncedLyrics(
   plainLyrics: string,
   trackDurationSec?: number,
 ): LyricLine[] | null {
-  const rawLines = plainLyrics
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !isSectionHeader(line));
-
-  const lyricLines = rawLines.filter(
-    (line) => !isIgnorableLyricLine(line) && line.trim().length >= 2,
-  );
-  if (lyricLines.length < 2) return null;
+  const preparedLines = buildPreparedLyricLines(plainLyrics);
+  const voicedLineCount = preparedLines.filter((line) => !line.isPause).length;
+  if (voicedLineCount < 2) return null;
 
   const totalWeight =
-    lyricLines.reduce((sum, line) => sum + lineWeight(line), 0) || lyricLines.length;
+    preparedLines.reduce((sum, line) => sum + getPreparedLyricLineWeight(line), 0) ||
+    preparedLines.length;
   const totalSpan =
     trackDurationSec && Number.isFinite(trackDurationSec)
-      ? Math.max(trackDurationSec - 0.2, lyricLines.length * 1.2)
-      : Math.max(lyricLines.length * 2.35, 6);
+      ? Math.max(trackDurationSec - 0.2, preparedLines.length * 1.2)
+      : Math.max(preparedLines.length * 2.35, 6);
 
   let accWeight = 0;
-  const synced = lyricLines.map((text, index) => {
+  const synced = preparedLines.map((line, index) => {
     const time = index === 0 ? 0 : (totalSpan * accWeight) / totalWeight;
-    accWeight += lineWeight(text);
-    return { time, text };
+    accWeight += getPreparedLyricLineWeight(line);
+    return { time, text: line.isPause ? LYRIC_PAUSE_MARKER : line.text };
   });
 
   for (let i = 1; i < synced.length; i++) {
@@ -1788,9 +1947,12 @@ function toResultLrclib(entry: LrclibEntry): LyricsResult | null {
   return normalizeLyricsResult({ plain, synced, source: 'lrclib' });
 }
 
-/** Remove feat/remix/brackets/special chars */
-function clean(s: string): string {
-  return s
+const AUDIO_FILE_EXTENSION_REGEX = /\.(?:mp3|wav|flac|ogg|aac|m4a|opus)\b/gi;
+
+/** Remove feat/remix/brackets/special chars while keeping title identity tokens like .mp3 */
+function clean(s: string, options: { stripAudioExtensions?: boolean } = {}): string {
+  const { stripAudioExtensions = false } = options;
+  let next = s
     .replace(/\(feat\.?[^)]*\)/gi, '')
     .replace(/\(ft\.?[^)]*\)/gi, '')
     .replace(/\[.*?\]/g, '')
@@ -1798,10 +1960,17 @@ function clean(s: string): string {
       /\(.*?(remix|edit|version|mix|cover|live|acoustic|instrumental|original|prod).*?\)/gi,
       '',
     )
-    .replace(/\s+(feat\.?|ft\.?|featuring|prod\.?)\b.*$/gi, '')
-    .replace(/\.(?:mp3|wav|flac|ogg|aac|m4a|opus)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/\s+(feat\.?|ft\.?|featuring|prod\.?)\b.*$/gi, '');
+
+  if (stripAudioExtensions) {
+    next = next.replace(AUDIO_FILE_EXTENSION_REGEX, ' ');
+  }
+
+  return next.replace(/\s+/g, ' ').trim();
+}
+
+function cleanLoose(s: string): string {
+  return clean(s, { stripAudioExtensions: true });
 }
 
 /** Aggressively strip all parentheses and brackets */
@@ -1910,6 +2079,103 @@ function normalizeSearchText(value: string): string {
     .trim();
 }
 
+const STYLIZED_SYMBOL_TO_LATIN_MAP: Record<string, string> = {
+  '!': 'i',
+  '$': 's',
+  '+': 't',
+  '0': 'o',
+  '1': 'i',
+  '3': 'e',
+  '4': 'a',
+  '5': 's',
+  '7': 't',
+  ':': 'a',
+  '@': 'a',
+  '|': 'i',
+};
+
+const STYLIZED_SYMBOL_TO_CYRILLIC_MAP: Record<string, string> = {
+  '$': 'с',
+  '0': 'о',
+  '1': 'и',
+  '3': 'е',
+  '4': 'а',
+  '5': 'с',
+  '7': 'т',
+  ':': 'а',
+  '@': 'а',
+};
+
+const LATIN_TO_CYRILLIC_STYLIZED_MAP: Record<string, string> = {
+  a: 'а',
+  b: 'в',
+  c: 'с',
+  d: 'д',
+  e: 'е',
+  h: 'н',
+  i: 'и',
+  k: 'к',
+  l: 'л',
+  m: 'м',
+  o: 'о',
+  p: 'р',
+  t: 'т',
+  x: 'х',
+  y: 'у',
+};
+
+function compactSearchText(value: string): string {
+  return normalizeSearchText(value).replace(/\s+/g, '').trim();
+}
+
+function looksStylizedSearchText(value: string): boolean {
+  const raw = String(value || '');
+  if (!raw) return false;
+  return (
+    /[!$+013457:@|]/.test(raw) ||
+    (/[а-яёіїєґ]/i.test(raw) && /[a-z]/i.test(raw))
+  );
+}
+
+function collectStylizedTextVariants(value: string): string[] {
+  const raw = String(value || '').trim();
+  if (!looksStylizedSearchText(raw)) return [];
+
+  let latinSeed = '';
+  let cyrillicSeed = '';
+
+  for (const char of Array.from(raw)) {
+    const lower = char.toLowerCase();
+    const cyrillicMapped = CYRILLIC_TO_LATIN_MAP[lower];
+
+    latinSeed += cyrillicMapped ?? STYLIZED_SYMBOL_TO_LATIN_MAP[lower] ?? char;
+    cyrillicSeed +=
+      LATIN_TO_CYRILLIC_STYLIZED_MAP[lower] ?? STYLIZED_SYMBOL_TO_CYRILLIC_MAP[lower] ?? char;
+  }
+
+  const variants: string[] = [];
+  const seen = new Set<string>();
+  const push = (next: string) => {
+    const normalized = normalizeSearchText(next);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    variants.push(next.trim());
+  };
+
+  for (const source of [latinSeed, cyrillicSeed]) {
+    push(source);
+    push(compactSearchText(source));
+
+    const transliterated = transliterateCyrillicToLatin(source);
+    push(transliterated);
+    push(compactSearchText(transliterated));
+    push(softenLatinVariant(transliterated));
+    push(compactSearchText(softenLatinVariant(transliterated)));
+  }
+
+  return variants;
+}
+
 function transliterateCyrillicToLatin(value: string): string {
   return Array.from(String(value || ''))
     .map((char) => {
@@ -2014,9 +2280,12 @@ function collectLooseTitleOnlyCandidates(values: Array<string | null | undefined
   for (const value of values) {
     const raw = String(value || '').trim();
     for (const candidate of [
-      clean(raw),
       stripBrackets(raw),
+      clean(raw),
       stripBrackets(clean(raw)),
+      cleanLoose(raw),
+      stripBrackets(cleanLoose(raw)),
+      ...collectStylizedTextVariants(raw),
       ...collectUploadStyleTitleHints(value),
       ...collectParentheticalTitleHints(value),
     ]) {
@@ -2054,18 +2323,31 @@ function getTextSearchVariants(value: string): string[] {
   const alpha = alphaOnly(cleaned);
   const uploadStyleHints = collectUploadStyleTitleHints(raw);
   const parentheticalHints = collectParentheticalTitleHints(raw);
+  const stylizedHints = collectStylizedTextVariants(raw);
 
   push(raw);
   for (const hint of uploadStyleHints) push(hint);
   for (const hint of parentheticalHints) push(hint);
+  for (const hint of stylizedHints) push(hint);
   push(cleaned);
   push(stripped);
   push(alpha);
 
-  for (const source of [raw, ...uploadStyleHints, ...parentheticalHints, cleaned, stripped, alpha]) {
+  for (const source of [
+    raw,
+    ...uploadStyleHints,
+    ...parentheticalHints,
+    ...stylizedHints,
+    cleaned,
+    stripped,
+    alpha,
+  ]) {
     const transliterated = transliterateCyrillicToLatin(source);
     push(transliterated);
     push(softenLatinVariant(transliterated));
+    push(compactSearchText(source));
+    push(compactSearchText(transliterated));
+    push(compactSearchText(softenLatinVariant(transliterated)));
   }
 
   return variants;
@@ -2281,10 +2563,18 @@ function buildGeniusDirectUrls(artist: string, title: string): string[] {
     .map(toGeniusSlugPart)
     .filter(Boolean)
     .slice(0, 4);
-  const titleSlugs = getTextSearchVariants(title)
-    .map(toGeniusSlugPart)
-    .filter(Boolean)
-    .slice(0, 6);
+  const titleSlugs: string[] = [];
+  const seenTitleSlugs = new Set<string>();
+  const pushTitleSlug = (value: string) => {
+    if (!value || seenTitleSlugs.has(value)) return;
+    seenTitleSlugs.add(value);
+    titleSlugs.push(value);
+  };
+
+  for (const titleSlug of getTextSearchVariants(title).map(toGeniusSlugPart).filter(Boolean)) {
+    pushTitleSlug(titleSlug);
+    pushTitleSlug(titleSlug.replace(/-(aac|flac|m4a|mp3|ogg|opus|wav)(?=$|-)/gi, '$1'));
+  }
 
   const push = (artistSlug: string, titleSlug: string) => {
     if (!artistSlug || !titleSlug) return;
@@ -2295,7 +2585,7 @@ function buildGeniusDirectUrls(artist: string, title: string): string[] {
   };
 
   for (const artistSlug of artistSlugs) {
-    for (const titleSlug of titleSlugs) {
+    for (const titleSlug of titleSlugs.slice(0, 8)) {
       push(artistSlug, titleSlug);
       if (urls.length >= 10) return urls;
     }
@@ -2459,6 +2749,7 @@ type LyricsSearchProfile = {
   originalTitle: string;
   uploaderUsername: string;
   durationSec: number | null;
+  requiredTitleTokens: string[];
   artistVariants: string[];
   titleVariants: string[];
   combinedVariants: string[];
@@ -2501,6 +2792,45 @@ function parseTagListPhrases(tagList: string | null | undefined): string[] {
   return [...quoted, ...chunks].slice(0, 8);
 }
 
+function collectArtistAliasHints(values: Array<string | null | undefined>): string[] {
+  const hints: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string) => {
+    const normalized = normalizeSearchText(value);
+    if (!normalized || seen.has(normalized)) return;
+    if (!/^[a-z0-9_ ]{3,32}$/i.test(normalized)) return;
+    if (!/[a-z]/i.test(normalized)) return;
+    if (/^(?:http|https|www|soundcloud|telegram|tme|link|links|official|music|artist)$/i.test(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    hints.push(value.trim());
+  };
+
+  for (const value of values) {
+    const raw = String(value || '');
+    if (!raw) continue;
+
+    for (const match of raw.matchAll(/(?:https?:\/\/)?t\.me\/([a-z0-9_]{3,32})/gi)) {
+      push(String(match[1] || ''));
+    }
+
+    for (const match of raw.matchAll(/\btgk\s*[-:]\s*([a-z0-9_]{3,32})\b/gi)) {
+      push(String(match[1] || ''));
+    }
+
+    for (const match of raw.matchAll(/(?:^|[\s(])@([a-z0-9_]{3,32})(?=$|[\s),.!?])/gi)) {
+      push(String(match[1] || ''));
+    }
+
+    for (const match of raw.matchAll(/(?:^|[\s(])([a-z][a-z0-9_]{2,31})(?=$|[\s),.!?])/gi)) {
+      push(String(match[1] || ''));
+    }
+  }
+
+  return hints.slice(0, 4);
+}
+
 function buildLyricsMetadataTokens(options: LyricsSearchOptions): string[] {
   const descriptionLines = String(options.description || '')
     .split(/\r?\n/)
@@ -2517,6 +2847,28 @@ function buildLyricsMetadataTokens(options: LyricsSearchOptions): string[] {
 
   const tokens = sources.flatMap((value) => tokenizeSearchText(value));
   return [...new Set(tokens)].slice(0, 28);
+}
+
+function collectRequiredTitleTokens(values: Array<string | null | undefined>): string[] {
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    for (const token of tokenizeSearchText(String(value || ''))) {
+      if (!REQUIRED_TITLE_IDENTITY_TOKENS.has(token) && !/\d/.test(token)) continue;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      tokens.push(token);
+    }
+  }
+
+  return tokens;
+}
+
+function hasMissingRequiredTitleTokens(title: string, requiredTitleTokens: string[]): boolean {
+  if (requiredTitleTokens.length === 0) return false;
+  const candidateTokens = new Set(tokenizeSearchText(title));
+  return requiredTitleTokens.some((token) => !candidateTokens.has(token));
 }
 
 function canUseLooseTitleOnly(title: string): boolean {
@@ -2540,6 +2892,11 @@ function buildLyricsSearchProfile(
 ): LyricsSearchProfile {
   const originalTitle = String(options.originalTitle || requestedTitle || '').trim();
   const uploaderUsername = String(options.uploaderUsername || requestedArtist || '').trim();
+  const artistAliasHints = collectArtistAliasHints([
+    options.description,
+    options.uploaderUsername,
+    requestedArtist,
+  ]);
   const durationSec =
     options.durationMs != null && Number.isFinite(options.durationMs)
       ? Math.max(Number(options.durationMs) / 1000, 0)
@@ -2551,13 +2908,16 @@ function buildLyricsSearchProfile(
     originalTitle,
     uploaderUsername,
     durationSec,
-    artistVariants: collectSearchVariants([requestedArtist, uploaderUsername]),
+    requiredTitleTokens: collectRequiredTitleTokens([requestedTitle, originalTitle]),
+    artistVariants: collectSearchVariants([requestedArtist, uploaderUsername, ...artistAliasHints]),
     titleVariants: collectSearchVariants([requestedTitle, originalTitle]),
     combinedVariants: collectSearchVariants([
       `${requestedArtist} ${requestedTitle}`,
       `${uploaderUsername} ${originalTitle}`,
       `${requestedArtist} ${originalTitle}`,
       `${uploaderUsername} ${requestedTitle}`,
+      ...artistAliasHints.map((artistAlias) => `${artistAlias} ${requestedTitle}`),
+      ...artistAliasHints.map((artistAlias) => `${artistAlias} ${originalTitle}`),
       requestedTitle,
       originalTitle,
     ]),
@@ -2644,6 +3004,7 @@ function isAcceptedLyricsCandidateScore(
   profile: LyricsSearchProfile,
   scored: { score: number; titleScore: number; artistScore: number; combinedScore: number },
   candidateArtist = '',
+  candidateTitle = '',
 ): boolean {
   const requiresStrongArtistMatch =
     !profile.allowLooseTitleOnly &&
@@ -2667,6 +3028,17 @@ function isAcceptedLyricsCandidateScore(
     if (
       scored.artistScore < softMinArtistScore &&
       scored.combinedScore < softMinCombinedScore
+    ) {
+      return false;
+    }
+  }
+
+  if (hasMissingRequiredTitleTokens(candidateTitle, profile.requiredTitleTokens)) {
+    const strongMinArtistScore = requiresStrongArtistMatch ? 0.3 : 0.24;
+    const strongMinCombinedScore = requiresStrongArtistMatch ? 0.66 : 0.6;
+    if (
+      scored.artistScore < strongMinArtistScore &&
+      scored.combinedScore < strongMinCombinedScore
     ) {
       return false;
     }
@@ -2703,7 +3075,8 @@ function pickBestLyricsCandidate<T>(
 
   const bestMeta = select(best.item);
   const bestArtist = String(bestMeta.artist || '').trim();
-  if (!isAcceptedLyricsCandidateScore(profile, best, bestArtist)) {
+  const bestTitle = String(bestMeta.title || '').trim();
+  if (!isAcceptedLyricsCandidateScore(profile, best, bestArtist, bestTitle)) {
     logLyricsDebug('rejecting low-confidence lyrics candidate', {
       requestedArtist: profile.requestedArtist,
       requestedTitle: profile.requestedTitle,
@@ -2713,6 +3086,11 @@ function pickBestLyricsCandidate<T>(
       artistScore: Number(best.artistScore.toFixed(3)),
       combinedScore: Number(best.combinedScore.toFixed(3)),
       candidateArtist: bestArtist,
+      candidateTitle: bestTitle,
+      missingRequiredTitleTokens: hasMissingRequiredTitleTokens(
+        bestTitle,
+        profile.requiredTitleTokens,
+      ),
     });
     return null;
   }
@@ -2862,6 +3240,48 @@ async function searchGenius(
       originalTitle: title,
       uploaderUsername: artist,
     });
+    const tryDirectUrls = async () => {
+      for (const url of buildGeniusDirectUrls(artist, title)) {
+        try {
+          const html = await requestText(url, signal);
+          const pageCandidate = extractGeniusCandidateFromHtml(html, url);
+          if (
+            pageCandidate &&
+            !isAcceptedLyricsCandidateScore(
+              profile,
+              scoreLyricsCandidate(
+                profile,
+                pageCandidate.artist,
+                pageCandidate.title,
+                `${pageCandidate.fullTitle} ${extractGeniusSlug(pageCandidate.url)}`,
+              ),
+              pageCandidate.artist,
+              pageCandidate.title,
+            )
+          ) {
+            continue;
+          }
+          const result = normalizeLyricsResult({
+            plain: normalizeGeniusPlainLyrics(extractGeniusLyricsFromHtml(html) || ''),
+            synced: null,
+            source: 'genius',
+          });
+          if (result) {
+            return result;
+          }
+        } catch {
+          // try next direct slug candidate
+        }
+      }
+
+      return null;
+    };
+
+    if (profile.requiredTitleTokens.length > 0) {
+      const direct = await tryDirectUrls();
+      if (direct) return direct;
+    }
+
     const queries = buildGeniusQueries(artist, title);
     const candidatesByUrl = new Map<string, GeniusSearchCandidate>();
     const artistCandidates: GeniusArtistCandidate[] = [];
@@ -2949,6 +3369,7 @@ async function searchGenius(
           `${candidate.fullTitle} ${extractGeniusSlug(candidate.url)}`,
         ),
         candidate.artist,
+        candidate.title,
       ),
     );
 
@@ -2964,39 +3385,7 @@ async function searchGenius(
       }
     }
 
-    for (const url of buildGeniusDirectUrls(artist, title)) {
-      try {
-        const html = await requestText(url, signal);
-        const pageCandidate = extractGeniusCandidateFromHtml(html, url);
-        if (
-          pageCandidate &&
-          !isAcceptedLyricsCandidateScore(
-            profile,
-            scoreLyricsCandidate(
-              profile,
-              pageCandidate.artist,
-              pageCandidate.title,
-              `${pageCandidate.fullTitle} ${extractGeniusSlug(pageCandidate.url)}`,
-            ),
-            pageCandidate.artist,
-          )
-        ) {
-          continue;
-        }
-        const result = normalizeLyricsResult({
-          plain: normalizeGeniusPlainLyrics(extractGeniusLyricsFromHtml(html) || ''),
-          synced: null,
-          source: 'genius',
-        });
-        if (result) {
-          return result;
-        }
-      } catch {
-        // try next direct slug candidate
-      }
-    }
-
-    return null;
+    return await tryDirectUrls();
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       return null;
@@ -3336,8 +3725,14 @@ export async function searchLyrics(
   const requestedTitle = String(scTitle || '').trim();
   const uploaderUsername = String(options.uploaderUsername || requestedArtist || '').trim();
   const originalTitle = String(options.originalTitle || requestedTitle || '').trim();
+  const artistAliasHints = collectArtistAliasHints([
+    requestedArtist,
+    uploaderUsername,
+    options.description,
+  ]);
   const parsedRequested = splitArtistTitle(requestedTitle);
   const parsedOriginal = splitArtistTitle(originalTitle);
+  const requiredTitleTokens = collectRequiredTitleTokens([requestedTitle, originalTitle]);
   const extractedTitleHints = collectLooseTitleOnlyCandidates([requestedTitle, originalTitle]).slice(0, 4);
   const missCacheKey = buildLyricsMissCacheKey(
     trackUrn,
@@ -3407,6 +3802,7 @@ export async function searchLyrics(
     const pushPriorityTitleOnlyAttempt = (title: string) => {
       const trimmedTitle = String(title || '').trim();
       if (!trimmedTitle || !hasStrongTitleOnlyHint(trimmedTitle)) return;
+      if (hasMissingRequiredTitleTokens(trimmedTitle, requiredTitleTokens)) return;
       const key = normalizeSearchText(trimmedTitle);
       if (!key || seenPriorityTitles.has(key)) return;
       seenPriorityTitles.add(key);
@@ -3455,6 +3851,7 @@ export async function searchLyrics(
       const trimmedArtist = String(artist || '').trim();
       const trimmedTitle = String(title || '').trim();
       if (!trimmedTitle) return;
+      if (hasMissingRequiredTitleTokens(trimmedTitle, requiredTitleTokens)) return;
       const key = `${normalizeSearchText(trimmedArtist)}::${normalizeSearchText(trimmedTitle)}`;
       if (seenPairs.has(key)) return;
       seenPairs.add(key);
@@ -3462,8 +3859,19 @@ export async function searchLyrics(
     };
 
     pushPairAttempt(requestedArtist, requestedTitle);
+    for (const artistAlias of artistAliasHints) {
+      pushPairAttempt(artistAlias, requestedTitle);
+      if (originalTitle && originalTitle !== requestedTitle) {
+        pushPairAttempt(artistAlias, originalTitle);
+      }
+      for (const titleHint of extractedTitleHints) {
+        pushPairAttempt(artistAlias, titleHint);
+      }
+    }
     for (const titleHint of extractedTitleHints) {
-      pushPairAttempt('', titleHint);
+      if (!hasMissingRequiredTitleTokens(titleHint, requiredTitleTokens)) {
+        pushPairAttempt('', titleHint);
+      }
       pushPairAttempt(requestedArtist, titleHint);
       if (uploaderUsername && uploaderUsername !== requestedArtist) {
         pushPairAttempt(uploaderUsername, titleHint);
@@ -3518,6 +3926,7 @@ export async function searchLyrics(
     const pushTitleOnlyAttempt = (title: string, allowShort = false) => {
       const trimmedTitle = String(title || '').trim();
       if (!trimmedTitle || (!allowShort && !canUseLooseTitleOnly(trimmedTitle))) return;
+      if (hasMissingRequiredTitleTokens(trimmedTitle, requiredTitleTokens)) return;
       const key = normalizeSearchText(trimmedTitle);
       if (!key || seenTitles.has(key)) return;
       seenTitles.add(key);
@@ -3562,6 +3971,21 @@ export async function searchLyrics(
       if (res) {
         return await saveMatchedLyrics(res);
       }
+    }
+
+    const descriptionLyrics = normalizeDescriptionLyricsText(options.description || '');
+    if (descriptionLyrics) {
+      logLyricsDebug('using SoundCloud description lyrics fallback', {
+        trackUrn,
+        requestedArtist,
+        requestedTitle,
+        plainLength: descriptionLyrics.length,
+      });
+      return await saveMatchedLyrics({
+        plain: descriptionLyrics,
+        synced: null,
+        source: 'soundcloud',
+      });
     }
 
     lyricsMissCache.set(missCacheKey, Date.now() + LYRICS_MISS_CACHE_TTL_MS);

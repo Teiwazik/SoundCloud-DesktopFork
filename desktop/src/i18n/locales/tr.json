@@ -8,6 +8,13 @@
     "collapse": "Collapse",
     "expand": "Expand"
   },
+  "sidebar": {
+    "quickAccess": "Quick Access",
+    "pinPlaylist": "Pin playlist",
+    "unpinPlaylist": "Unpin playlist",
+    "pinned": "Added to quick access",
+    "unpinned": "Removed from quick access"
+  },
   "player": {
     "queue": "Queue",
     "nowPlaying": "Now Playing",

@@ -2,7 +2,9 @@ import { listen } from '@tauri-apps/api/event';
 import type React from 'react';
 import { useEffect, useRef } from 'react';
 import { isAppBackgrounded } from '../../lib/app-visibility';
+import { useArtworkGradientPalette } from '../../lib/artwork-palette';
 import { getAnimationFrameBudgetMs } from '../../lib/framerate';
+import { usePlayerStore } from '../../stores/player';
 import { useSettingsStore } from '../../stores/settings';
 
 export type VisualizerStyle = 'Off' | 'Bars' | 'Wave' | 'Pulse';
@@ -65,11 +67,7 @@ function hexToRgb(hex: string): RgbColor {
   return { r, g, b };
 }
 
-function mixRgb(
-  from: RgbColor,
-  to: RgbColor,
-  factor: number,
-) : RgbColor {
+function mixRgb(from: RgbColor, to: RgbColor, factor: number): RgbColor {
   return {
     r: Math.round(from.r + (to.r - from.r) * factor),
     g: Math.round(from.g + (to.g - from.g) * factor),
@@ -137,6 +135,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
   const themePreset = useSettingsStore((s) => s.themePreset);
   const accentColorHex = useSettingsStore((s) => s.accentColor);
   const themeGradientEnabled = useSettingsStore((s) => s.themeGradientEnabled);
+  const themeGradientFollowArtwork = useSettingsStore((s) => s.themeGradientFollowArtwork);
   const themeGradientType = useSettingsStore((s) => s.themeGradientType);
   const themeGradientColorA = useSettingsStore((s) => s.themeGradientColorA);
   const themeGradientColorB = useSettingsStore((s) => s.themeGradientColorB);
@@ -145,6 +144,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
   const themeGlowEnabled = useSettingsStore((s) => s.themeGlowEnabled);
   const themeGlowIntensity = useSettingsStore((s) => s.themeGlowIntensity);
   const themeGlowOpacity = useSettingsStore((s) => s.themeGlowOpacity);
+  const currentArtworkUrl = usePlayerStore((s) => s.currentTrack?.artwork_url ?? null);
   const vizScale = useSettingsStore((s) => s.visualizerScale) / 100;
   const vizYOffset = useSettingsStore((s) => s.visualizerYOffset);
   const vizMirror = useSettingsStore((s) => s.visualizerMirror);
@@ -152,6 +152,26 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
   const vizBars = useSettingsStore((s) => s.visualizerBars);
   const targetFramerate = useSettingsStore((s) => s.targetFramerate);
   const unlockFramerate = useSettingsStore((s) => s.unlockFramerate);
+  const artworkGradientPalette = useArtworkGradientPalette(
+    themeGradientFollowArtwork ? currentArtworkUrl : null,
+  );
+  const gradientFromArtworkActive =
+    themePreset === 'custom' &&
+    themeGradientEnabled &&
+    themeGradientFollowArtwork &&
+    Boolean(artworkGradientPalette);
+  const effectiveAccentColor = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientB
+    : accentColorHex;
+  const effectiveThemeGradientColorA = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientA
+    : themeGradientColorA;
+  const effectiveThemeGradientColorB = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientB
+    : themeGradientColorB;
+  const effectiveThemeGradientColorC = gradientFromArtworkActive
+    ? artworkGradientPalette!.gradientC
+    : themeGradientColorC;
 
   const cfgRef = useRef({
     smoothing: vizSmoothing,
@@ -174,8 +194,12 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
 
   useEffect(() => {
     const customGradientActive = themeColorOpt && themePreset === 'custom' && themeGradientEnabled;
-    const accentRgb = themeColorOpt ? hexToRgb(accentColorHex) : { r: 255, g: 255, b: 255 };
-    const gradientColors = [themeGradientColorA, themeGradientColorB, themeGradientColorC]
+    const accentRgb = themeColorOpt ? hexToRgb(effectiveAccentColor) : { r: 255, g: 255, b: 255 };
+    const gradientColors = [
+      effectiveThemeGradientColorA,
+      effectiveThemeGradientColorB,
+      effectiveThemeGradientColorC,
+    ]
       .map(hexToRgb)
       .sort((lhs, rhs) => luminance(lhs) - luminance(rhs));
     const darkest = gradientColors[0];
@@ -200,26 +224,27 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
     cfgRef.current.gradientActive = customGradientActive;
     cfgRef.current.gradientType = themeGradientType;
     cfgRef.current.gradientAngle = themeGradientAngle;
-    cfgRef.current.gradientA = hexToRgb(themeGradientColorA);
-    cfgRef.current.gradientB = hexToRgb(themeGradientColorB);
-    cfgRef.current.gradientC = hexToRgb(themeGradientColorC);
+    cfgRef.current.gradientA = hexToRgb(effectiveThemeGradientColorA);
+    cfgRef.current.gradientB = hexToRgb(effectiveThemeGradientColorB);
+    cfgRef.current.gradientC = hexToRgb(effectiveThemeGradientColorC);
     cfgRef.current.glowBlur =
       themeColorOpt && themeGlowEnabled ? 10 + (themeGlowIntensity / 100) * 24 : 0;
     cfgRef.current.glowAlpha =
       themeColorOpt && themeGlowEnabled ? 0.1 + (themeGlowOpacity / 100) * 0.3 : 0;
     cfgRef.current.frameBudgetMs = getAnimationFrameBudgetMs(targetFramerate, unlockFramerate);
   }, [
-    accentColorHex,
+    effectiveAccentColor,
+    effectiveThemeGradientColorA,
+    effectiveThemeGradientColorB,
+    effectiveThemeGradientColorC,
     targetFramerate,
     themeColorOpt,
     themeGlowEnabled,
     themeGlowIntensity,
     themeGlowOpacity,
     themeGradientAngle,
-    themeGradientColorA,
-    themeGradientColorB,
-    themeGradientColorC,
     themeGradientEnabled,
+    themeGradientFollowArtwork,
     themeGradientType,
     themePreset,
     unlockFramerate,
@@ -265,7 +290,9 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
       }
 
       const deltaMs =
-        lastFrameTs > 0 ? Math.min(Math.max(ts - lastFrameTs, 1000 / 240), 1000 / 8) : smoothingStepMs;
+        lastFrameTs > 0
+          ? Math.min(Math.max(ts - lastFrameTs, 1000 / 240), 1000 / 8)
+          : smoothingStepMs;
       lastFrameTs = ts;
 
       const canvas = canvasRef.current;
@@ -508,11 +535,20 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
         const rad = Math.min(w, h) * 0.2 + (avg / 255) * Math.min(w, h) * 0.3;
 
         const coreGradient = gradientActive
-          ? createThemeCanvasGradient(ctx, cx - rad, cy - rad, rad * 2, rad * 2, 'radial', gradientAngle, [
-              { offset: 0, color: gradientB, alpha: 0.96 },
-              { offset: 0.62, color: gradientC, alpha: 0.58 },
-              { offset: 1, color: gradientA, alpha: 0 },
-            ])
+          ? createThemeCanvasGradient(
+              ctx,
+              cx - rad,
+              cy - rad,
+              rad * 2,
+              rad * 2,
+              'radial',
+              gradientAngle,
+              [
+                { offset: 0, color: gradientB, alpha: 0.96 },
+                { offset: 0.62, color: gradientC, alpha: 0.58 },
+                { offset: 1, color: gradientA, alpha: 0 },
+              ],
+            )
           : (() => {
               const gradient = ctx.createRadialGradient(cx, cy, rad * 0.22, cx, cy, rad);
               gradient.addColorStop(0, toRgba(accent, 0.96));
@@ -536,9 +572,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ className = '', style })
           ctx.lineWidth = Math.max(1, 2.2 - ring * 0.35);
           ctx.shadowBlur = glowBlur * (0.85 + ring * 0.2);
           ctx.strokeStyle =
-            ring === 1
-              ? toRgba(highlight, 0.24)
-              : toRgba(glow, Math.max(0.08, 0.18 - ring * 0.04));
+            ring === 1 ? toRgba(highlight, 0.24) : toRgba(glow, Math.max(0.08, 0.18 - ring * 0.04));
           ctx.stroke();
         }
 

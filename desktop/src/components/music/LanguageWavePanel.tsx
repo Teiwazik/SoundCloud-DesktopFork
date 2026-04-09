@@ -55,9 +55,10 @@ export const LanguageWavePanel = memo(() => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const languageFilterEnabled = useSettingsStore((s) => s.languageFilterEnabled);
-  const preferredLanguage = useSettingsStore((s) => s.preferredLanguage);
+  const preferredLanguages = useSettingsStore((s) => s.preferredLanguages);
   const setLanguageFilterEnabled = useSettingsStore((s) => s.setLanguageFilterEnabled);
-  const setPreferredLanguage = useSettingsStore((s) => s.setPreferredLanguage);
+  const setPreferredLanguages = useSettingsStore((s) => s.setPreferredLanguages);
+  const togglePreferredLanguage = useSettingsStore((s) => s.togglePreferredLanguage);
 
   const detectedTracks = useSoundWaveStore((s) => s.detectedLanguages);
   const isActive = useSoundWaveStore((s) => s.isActive);
@@ -67,16 +68,19 @@ export const LanguageWavePanel = memo(() => {
     .sort(([, a], [, b]) => b - a)
     .slice(0, 6);
 
-  const selectedLang = SUPPORTED_LANGUAGES.find((l) => l.code === preferredLanguage);
+  const selectedLanguages = SUPPORTED_LANGUAGES.filter((lang) =>
+    preferredLanguages.includes(lang.code),
+  );
+  const selectedLang = selectedLanguages.length === 1 ? selectedLanguages[0] : null;
   const flagEmojiStyle: CSSProperties = {
     fontFamily: `'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif`,
   };
   const selectedLabel =
-    preferredLanguage === 'all'
-      ? t('languageWaveAll')
-      : selectedLang?.flags +
-        ' ' +
-        (selectedLang?.flags === '🇷🇺' ? 'Русский' : selectedLang?.name || preferredLanguage);
+    selectedLanguages.length === 0
+      ? t('settings.languageWaveAll')
+      : selectedLang
+        ? `${selectedLang.flags} ${selectedLang.flags === '🇷🇺' ? 'Русский' : selectedLang.name}`
+        : t('settings.languageWaveSelected', { count: selectedLanguages.length });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -179,7 +183,9 @@ export const LanguageWavePanel = memo(() => {
                   : 'bg-white/10 text-white/50 hover:text-white'
               }`}
             >
-              {languageFilterEnabled ? t('languageWaveEnabled') : t('languageWaveDisabled')}
+              {languageFilterEnabled
+                ? t('settings.languageWaveEnabled')
+                : t('settings.languageWaveDisabled')}
             </button>
 
             <div className="relative">
@@ -199,17 +205,16 @@ export const LanguageWavePanel = memo(() => {
                 <div className="absolute bottom-full right-0 mb-2 w-56 bg-[#1a1a1f] border border-white/10 rounded-2xl p-3 shadow-2xl z-50">
                   <button
                     onClick={() => {
-                      setPreferredLanguage('all');
-                      setIsExpanded(false);
+                      setPreferredLanguages([]);
                     }}
                     className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all mb-1 ${
-                      preferredLanguage === 'all'
+                      preferredLanguages.length === 0
                         ? 'bg-white/15 text-white'
                         : 'text-white/50 hover:text-white hover:bg-white/5'
                     }`}
                   >
                     <Globe size={14} />
-                    <span>{t('languageWaveAll')}</span>
+                    <span>{t('settings.languageWaveAll')}</span>
                   </button>
 
                   <div className="border-t border-white/5 pt-2 space-y-0.5 max-h-48 overflow-y-auto">
@@ -220,19 +225,18 @@ export const LanguageWavePanel = memo(() => {
                         <button
                           key={code}
                           onClick={() => {
-                            setPreferredLanguage(code);
-                            setIsExpanded(false);
+                            togglePreferredLanguage(code);
                           }}
                           className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
-                            preferredLanguage === code
+                            preferredLanguages.includes(code)
                               ? 'bg-white/15 text-white'
                               : 'text-white/50 hover:text-white hover:bg-white/5'
                           }`}
-                    >
-                      <span style={flagEmojiStyle}>{lang.flags}</span>
-                      <span className="flex-1 text-left">
-                        {lang.flags === '🇷🇺' ? 'Русский' : lang.nativeName}
-                      </span>
+                        >
+                          <span style={flagEmojiStyle}>{lang.flags}</span>
+                          <span className="flex-1 text-left">
+                            {lang.flags === '🇷🇺' ? 'Русский' : lang.nativeName}
+                          </span>
                           <span className="text-white/40">{percentage}%</span>
                         </button>
                       );

@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useShallow } from 'zustand/shallow';
 import { LikeButton } from '../components/music/LikeButton';
 import { CopyLinkButton } from '../components/ui/CopyLinkButton';
 import { api } from '../lib/api';
@@ -37,6 +38,7 @@ import {
   heart9,
   ListMusic,
   Loader2,
+  MapPin,
   musicIcon12,
   pauseBlack22,
   pauseCurrent16,
@@ -51,6 +53,7 @@ import {
 import { useTrackPlay } from '../lib/useTrackPlay';
 import { useAuthStore } from '../stores/auth';
 import { type Track, usePlayerStore } from '../stores/player';
+import { useSettingsStore } from '../stores/settings';
 
 /* ── Playlist Like Button ─────────────────────────────────── */
 
@@ -368,9 +371,17 @@ export const PlaylistPage = React.memo(() => {
   const updateTracks = useUpdatePlaylistTracks(urn);
   const deletePlaylist = useDeletePlaylist();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const { pinnedPlaylists, pinPlaylist, unpinPlaylist } = useSettingsStore(
+    useShallow((s) => ({
+      pinnedPlaylists: s.pinnedPlaylists,
+      pinPlaylist: s.pinPlaylist,
+      unpinPlaylist: s.unpinPlaylist,
+    })),
+  );
 
   const isLoading = playlistLoading || tracksLoading;
   const isOwner = !!playlist && !!myUrn && playlist.user.urn === myUrn;
+  const isPinned = pinnedPlaylists.some((item) => item.urn === playlist?.urn);
 
   const serverTracks: Track[] = React.useMemo(() => {
     if (isLoading || !playlist) return [];
@@ -488,6 +499,23 @@ export const PlaylistPage = React.memo(() => {
     });
   };
 
+  const handleTogglePin = () => {
+    if (!playlist) return;
+
+    if (isPinned) {
+      unpinPlaylist(playlist.urn);
+      toast.success(t('sidebar.unpinned'));
+      return;
+    }
+
+    pinPlaylist({
+      urn: playlist.urn,
+      title: playlist.title,
+      artworkUrl: playlist.artwork_url ?? tracks[0]?.artwork_url ?? null,
+    });
+    toast.success(t('sidebar.pinned'));
+  };
+
   return (
     <div className="p-6 pb-4 space-y-7 animate-fade-in-up">
       {/* ── Hero ─────────────────────────────────────── */}
@@ -596,6 +624,18 @@ export const PlaylistPage = React.memo(() => {
               >
                 <Shuffle size={16} />
                 {t('playlist.shuffle')}
+              </button>
+              <button
+                type="button"
+                onClick={handleTogglePin}
+                className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ease-[var(--ease-apple)] cursor-pointer ${
+                  isPinned
+                    ? 'bg-white/[0.08] text-white/85 border border-white/[0.12]'
+                    : 'glass hover:bg-white/[0.05] text-white/60 hover:text-white/80'
+                }`}
+              >
+                <MapPin size={16} />
+                {isPinned ? t('sidebar.unpinPlaylist') : t('sidebar.pinPlaylist')}
               </button>
               <PlaylistLikeBtn playlistUrn={playlist.urn} count={playlist.likes_count} />
               <CopyLinkButton url={playlist.permalink_url} />
