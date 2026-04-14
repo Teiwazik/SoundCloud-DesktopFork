@@ -47,6 +47,9 @@ symphonia = { version = "0.5.5", default-features = false, features = ["aac", "m
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 soundtouch = { version = "0.5.4", features = ["bundled"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+soundtouch = "0.5.4"
+
 [patch.crates-io]
 soundtouch-ffi = { path = "vendor/soundtouch-ffi" }
 
