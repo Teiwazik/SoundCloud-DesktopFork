@@ -86,6 +86,13 @@ type RootWindow = Window & {
   };
 };
 
+// React StrictMode doubles mounts/effects in dev and tanks WebKitGTK FPS in tauri dev.
+const useStrictMode = !(import.meta.env.DEV && isTauriRuntime());
+
+function AppRoot({ children }: { children: React.ReactNode }) {
+  return useStrictMode ? <React.StrictMode>{children}</React.StrictMode> : <>{children}</>;
+}
+
 function clearDevPerformanceTimeline() {
   performance.clearMeasures();
   performance.clearMarks();
@@ -181,9 +188,9 @@ function getRoot(): Root | null {
 
 function renderBootstrapScreen(root: Root, title: string, label: string, error?: string) {
   root.render(
-    <React.StrictMode>
+    <AppRoot>
       <BootstrapScreen title={title} label={label} error={error} />
-    </React.StrictMode>,
+    </AppRoot>,
   );
 }
 
@@ -237,11 +244,11 @@ async function bootstrap() {
     setServerPorts(staticPort, proxyPort);
 
     root.render(
-      <React.StrictMode>
+      <AppRoot>
         <QueryClientProvider client={queryClient}>
           <App />
         </QueryClientProvider>
-      </React.StrictMode>,
+      </AppRoot>,
     );
 
     if (tauriRuntime) {

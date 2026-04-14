@@ -5,7 +5,8 @@ import i18n from '../i18n';
 import { useAppStatusStore } from '../stores/app-status';
 import { useSettingsStore } from '../stores/settings';
 import { waitForAuthHydration } from './auth-hydration';
-import { buildApiUrl, STREAMING_BASE } from './constants';
+import { buildApiUrl, STREAMING_BASE, STREAMING_PREMIUM_BASE } from './constants';
+import { getIsPremium } from './subscription';
 
 let sessionId: string | null = null;
 let rateLimitUntil = 0;
@@ -138,7 +139,11 @@ function handleUnauthorized() {
 }
 
 export async function api<T = unknown>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const { quietHttpErrors = false, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...requestOptions } = options;
+  const {
+    quietHttpErrors = false,
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    ...requestOptions
+  } = options;
   await waitForAuthHydration();
   await waitForRateLimitWindow();
 
@@ -230,6 +235,42 @@ export function streamUrl(
     params.set('session_id', sessionId);
   }
   return `${STREAMING_BASE}/stream/${encodeURIComponent(trackUrn)}?${params.toString()}`;
+}
+
+function buildStreamUrl(base: string, trackUrn: string, premium: boolean, hq: boolean) {
+  const params = new URLSearchParams();
+  if (hq) params.set('hq', 'true');
+  if (sessionId) params.set('session_id', sessionId);
+  const path = premium ? '/premium' : '';
+  return `${base}/stream/${encodeURIComponent(trackUrn)}${path}?${params.toString()}`;
+}
+
+export function streamFallbackUrls(
+  trackUrn: string,
+  hq: boolean = useSettingsStore.getState().highQualityStreaming,
+): string[] {
+  const isPremium = getIsPremium();
+  const sBase = STREAMING_BASE;
+  const spBase = STREAMING_PREMIUM_BASE;
+  if (isPremium) {
+    return [
+      buildStreamUrl(spBase, trackUrn, true, hq),
+      buildStreamUrl(spBase, trackUrn, false, hq),
+      buildStreamUrl(sBase, trackUrn, true, hq),
+      buildStreamUrl(sBase, trackUrn, false, hq),
+    ];
+  }
+  return [buildStreamUrl(sBase, trackUrn, true, hq), buildStreamUrl(sBase, trackUrn, false, hq)];
+}
+
+export type ResolvedStreamingTrack = Partial<import('../stores/player').Track> & {
+  full_duration?: number;
+};
+
+export function resolveTrackFromStreaming(url: string) {
+  return api<ResolvedStreamingTrack>(`/resolve?url=${encodeURIComponent(url)}`, {
+    quietHttpErrors: true,
+  });
 }
 
 export type ApiRequestOptions = RequestInit & {

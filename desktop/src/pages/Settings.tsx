@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { useSubscription } from '../lib/subscription';
 import { Skeleton } from '../components/ui/Skeleton.tsx';
 import { useArtworkGradientPalette } from '../lib/artwork-palette';
 import { reloadCurrentTrack } from '../lib/audio';
@@ -1456,6 +1457,7 @@ const SoundWaveSection = React.memo(function SoundWaveSection() {
 
 const PlaybackSection = React.memo(function PlaybackSection() {
   const { t } = useTranslation();
+  const { data: isPremium } = useSubscription(true);
   const floatingComments = useSettingsStore((s) => s.floatingComments);
   const setFloatingComments = useSettingsStore((s) => s.setFloatingComments);
   const normalizeVolume = useSettingsStore((s) => s.normalizeVolume);
@@ -1565,6 +1567,7 @@ const PlaybackSection = React.memo(function PlaybackSection() {
 
       <div className="border-t border-white/[0.04]" />
 
+      {isPremium && (
       <div className="flex items-center justify-between">
         <div>
           <p className="text-[13px] text-white/70 font-medium">
@@ -1587,6 +1590,7 @@ const PlaybackSection = React.memo(function PlaybackSection() {
           />
         </button>
       </div>
+      )}
 
       <div className="border-t border-white/[0.04]" />
 

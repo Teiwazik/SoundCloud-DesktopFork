@@ -42,7 +42,7 @@ import {
 import { optimisticToggleLike } from '../../lib/likes';
 import { LYRICS_SEARCH_QUERY_VERSION, searchLyrics } from '../../lib/lyrics';
 import { useDislikesStore } from '../../stores/dislikes';
-import { useArtworkStore, useLyricsStore } from '../../stores/lyrics';
+import { useArtworkStore, useFullscreenPanelStore, useLyricsStore } from '../../stores/lyrics';
 import {
   getEffectivePitchSemitones,
   isTrackPlaybackRateEnabledForTrack,
@@ -72,6 +72,88 @@ function formatPitchSemitones(semitones: number): string {
   if (Math.abs(semitones) < 0.001) return '0 st';
   return `${semitones > 0 ? '+' : ''}${semitones.toFixed(1).replace(/\.0$/, '')} st`;
 }
+
+/* ── Download Progress Panel ────────────────────────────────── */
+
+const DownloadProgressPanel = React.memo(() => {
+  const downloadProgress = usePlayerStore((s) => s.downloadProgress);
+  const animRef = useRef<number | null>(null);
+  const progressRef = useRef(0);
+  const [, forceUpdate] = useState(0);
+
+  useEffect(() => {
+    if (downloadProgress === null) {
+      if (animRef.current) {
+        cancelAnimationFrame(animRef.current);
+        animRef.current = null;
+      }
+      progressRef.current = 0;
+      return;
+    }
+
+    if (downloadProgress >= 1) {
+      if (animRef.current) {
+        cancelAnimationFrame(animRef.current);
+        animRef.current = null;
+      }
+      progressRef.current = 1;
+      forceUpdate((n) => n + 1);
+      const timer = setTimeout(() => {
+        progressRef.current = 0;
+        usePlayerStore.setState({ downloadProgress: null });
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      progressRef.current += (0.92 - progressRef.current) * dt * 0.8;
+      forceUpdate((n) => n + 1);
+      animRef.current = requestAnimationFrame(tick);
+    };
+    animRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (animRef.current) {
+        cancelAnimationFrame(animRef.current);
+        animRef.current = null;
+      }
+    };
+  }, [downloadProgress]);
+
+  if (downloadProgress === null) return null;
+
+  const p = Math.max(0, Math.min(1, progressRef.current));
+  const percent = p >= 1 ? 100 : Math.max(1, Math.min(99, Math.round(p * 100)));
+
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-0 z-30 -translate-x-1/2 -translate-y-[calc(100%+8px)]">
+      <div
+        className="flex min-w-[148px] items-center gap-2.5 rounded-full border border-white/[0.08] bg-white/[0.045] px-3 py-2 shadow-[0_10px_34px_rgba(0,0,0,0.32),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-[22px]"
+        style={{ contain: 'strict', transform: 'translateZ(0)' }}
+      >
+        <div className="relative h-1.5 w-20 overflow-hidden rounded-full bg-white/[0.09]">
+          <div className="absolute inset-0 rounded-full bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))]" />
+          <div
+            className="absolute inset-y-0 left-0 rounded-full"
+            style={{
+              width: `${percent}%`,
+              background:
+                'linear-gradient(90deg, var(--color-accent) 0%, var(--color-accent-hover) 100%)',
+              boxShadow: '0 0 12px var(--color-accent-glow)',
+              transition: 'width 80ms linear',
+            }}
+          />
+        </div>
+        <div className="min-w-[34px] text-right text-[11px] font-semibold tabular-nums text-white/72">
+          {percent}%
+        </div>
+      </div>
+    </div>
+  );
+});
 
 /* ── Progress Slider ─────────────────────────────────────────── */
 
@@ -775,13 +857,20 @@ const QueueBtn = React.memo(({ onClick, active }: { onClick: () => void; active:
 
 const LyricsBtn = React.memo(() => {
   const open = useLyricsStore((s) => s.open);
-  const close = useLyricsStore((s) => s.close);
+  const artworkOpen = useArtworkStore((s) => s.open);
   const openFromMiniPlayer = useLyricsStore((s) => s.openFromMiniPlayer);
+  const isActive = open || artworkOpen;
   return (
     <button
       type="button"
-      onClick={() => (open ? close() : openFromMiniPlayer())}
-      className={btnClass(open, 'sm')}
+      onClick={() => {
+        if (isActive) {
+          useFullscreenPanelStore.getState().beginClose();
+        } else {
+          openFromMiniPlayer();
+        }
+      }}
+      className={btnClass(isActive, 'sm')}
     >
       <MicVocal size={16} />
     </button>
@@ -1328,6 +1417,7 @@ export const NowPlayingBar = React.memo(
         {visualizerPlaybar && !isMobile && !isFullscreenOverlayOpen && <PlaybarVisualizer />}
 
         <div className="relative z-10" style={{ isolation: 'isolate' }}>
+          {!isMobile && <DownloadProgressPanel />}
           {!isMobile && <ProgressSlider />}
           <div
             className={

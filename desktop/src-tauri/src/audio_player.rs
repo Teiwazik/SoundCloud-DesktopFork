@@ -12,7 +12,6 @@ use rodio::stream::DeviceSinkBuilder;
 use rodio::{Decoder, Player, Source};
 use rustfft::{num_complex::Complex, FftPlanner};
 use sha2::{Digest, Sha256};
-#[cfg(not(target_os = "macos"))]
 use soundtouch::{Setting as SoundTouchSetting, SoundTouch};
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata as SmtcMetadata, MediaPlayback, MediaPosition,
@@ -258,7 +257,6 @@ impl<S: Source<Item = f32>> Source for GainSource<S> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 struct PitchSource<S: Source<Item = f32>> {
     source: S,
     params: Arc<RwLock<PitchParams>>,
@@ -274,7 +272,6 @@ struct PitchSource<S: Source<Item = f32>> {
     flushed: bool,
 }
 
-#[cfg(not(target_os = "macos"))]
 impl<S: Source<Item = f32>> PitchSource<S> {
     fn new(source: S, params: Arc<RwLock<PitchParams>>) -> Self {
         let channels = source.channels();
@@ -406,7 +403,6 @@ impl<S: Source<Item = f32>> PitchSource<S> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 impl<S: Source<Item = f32>> Iterator for PitchSource<S> {
     type Item = f32;
 
@@ -428,7 +424,6 @@ impl<S: Source<Item = f32>> Iterator for PitchSource<S> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 impl<S: Source<Item = f32>> Source for PitchSource<S> {
     fn current_span_len(&self) -> Option<usize> {
         None
@@ -450,55 +445,6 @@ impl<S: Source<Item = f32>> Source for PitchSource<S> {
         self.refresh_processing_params();
         self.source_finished = false;
         Ok(())
-    }
-}
-
-#[cfg(target_os = "macos")]
-struct PitchSource<S: Source<Item = f32>> {
-    source: S,
-    channels: ChannelCount,
-    sample_rate: SampleRate,
-}
-
-#[cfg(target_os = "macos")]
-impl<S: Source<Item = f32>> PitchSource<S> {
-    fn new(source: S, _params: Arc<RwLock<PitchParams>>) -> Self {
-        let channels = source.channels();
-        let sample_rate = source.sample_rate();
-        Self {
-            source,
-            channels,
-            sample_rate,
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl<S: Source<Item = f32>> Iterator for PitchSource<S> {
-    type Item = f32;
-
-    #[inline]
-    fn next(&mut self) -> Option<f32> {
-        self.source.next()
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl<S: Source<Item = f32>> Source for PitchSource<S> {
-    fn current_span_len(&self) -> Option<usize> {
-        self.source.current_span_len()
-    }
-    fn channels(&self) -> ChannelCount {
-        self.channels
-    }
-    fn sample_rate(&self) -> SampleRate {
-        self.sample_rate
-    }
-    fn total_duration(&self) -> Option<Duration> {
-        self.source.total_duration()
-    }
-    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
-        self.source.try_seek(pos)
     }
 }
 
@@ -841,9 +787,6 @@ fn create_player_from_bytes(
 
     let player = Player::connect_new(mixer);
     player.set_volume(volume.clamp(0.0, 2.0));
-    #[cfg(target_os = "macos")]
-    player.set_speed(playback_speed);
-    #[cfg(not(target_os = "macos"))]
     player.set_speed(1.0);
 
     let duration;
@@ -1520,17 +1463,26 @@ pub async fn audio_load_url(
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_ascii_lowercase());
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
 
-    let empty_result = AudioLoadResult {
-        duration_secs: None,
-        stream_quality: None,
-        stream_content_type: None,
-    };
+    let total_size: Option<u64> = resp
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+
+    if total_size.unwrap_or(0) > 0 {
+        let _ = app.emit("audio:download_progress", serde_json::json!({"gen": gen, "progress": 0.0}));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
 
     // Stale check after download — another track may have started loading
     if state.load_gen.load(Ordering::Relaxed) != gen {
-        return Ok(empty_result);
+        return Ok(AudioLoadResult {
+            duration_secs: None,
+            stream_quality: None,
+            stream_content_type: None,
+        });
     }
 
     // Decode and play
@@ -1617,7 +1569,11 @@ pub async fn audio_load_url(
 
     // Stale check again after processing stops
     if state.load_gen.load(Ordering::Relaxed) != gen {
-        return Ok(empty_result);
+        return Ok(AudioLoadResult {
+            duration_secs: None,
+            stream_quality: None,
+            stream_content_type: None,
+        });
     }
 
     if let Some(path) = cache_path {
@@ -1794,11 +1750,6 @@ pub fn audio_set_playback_rate(playback_rate: f64, state: tauri::State<'_, Audio
     }
 
     *state.playback_speed.lock().unwrap() = rate;
-
-    #[cfg(target_os = "macos")]
-    if let Some(ref p) = *state.player.lock().unwrap() {
-        p.set_speed(rate);
-    }
 
     if let Ok(mut params) = state.pitch_params.write() {
         params.playback_rate = rate;

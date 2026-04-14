@@ -225,6 +225,7 @@ interface PlayerState {
   pitchControlMode: PitchControlMode;
   shuffle: boolean;
   repeat: RepeatMode;
+  downloadProgress: number | null;
 
   play: (track: Track, queue?: Track[], source?: 'manual' | 'soundwave') => void;
   playFromQueue: (index: number) => void;
@@ -252,6 +253,7 @@ interface PlayerState {
   setTrackAccessByUrn: (urn: string, access: Track['access']) => void;
   setCurrentTrackStreamQuality: (quality: Track['streamQuality']) => void;
   setCurrentTrackStreamCodec: (codec: Track['streamCodec']) => void;
+  replaceTrackMetadata: (track: Track) => void;
 }
 
 export const usePlayerStore = create<PlayerState>()(
@@ -273,6 +275,7 @@ export const usePlayerStore = create<PlayerState>()(
       pitchControlMode: 'manual',
       shuffle: false,
       repeat: 'off',
+      downloadProgress: null,
 
       play: (track, queue, source = 'manual') => {
         const {
@@ -571,7 +574,6 @@ export const usePlayerStore = create<PlayerState>()(
       toggleShuffle: () => {
         const { shuffle, queue, queueIndex, currentTrack } = get();
         if (!shuffle) {
-          // ON: save original order, shuffle everything after current track
           const original = [...queue];
           const after = [...queue.slice(queueIndex + 1)];
           shuffleArray(after);
@@ -581,7 +583,6 @@ export const usePlayerStore = create<PlayerState>()(
             queue: [...queue.slice(0, queueIndex + 1), ...after],
           });
         } else {
-          // OFF: restore original order
           const { originalQueue } = get();
           if (originalQueue && currentTrack) {
             const idx = originalQueue.findIndex((t) => t.urn === currentTrack.urn);
@@ -617,6 +618,15 @@ export const usePlayerStore = create<PlayerState>()(
         set((s) => (s.currentTrack ? { currentTrack: { ...s.currentTrack, streamQuality } } : {})),
       setCurrentTrackStreamCodec: (streamCodec) =>
         set((s) => (s.currentTrack ? { currentTrack: { ...s.currentTrack, streamCodec } } : {})),
+      replaceTrackMetadata: (track) =>
+        set((s) => {
+          const update = (t: Track) => (t.urn === track.urn ? { ...t, ...track } : t);
+          return {
+            currentTrack: s.currentTrack ? update(s.currentTrack) : s.currentTrack,
+            queue: s.queue.map(update),
+            originalQueue: s.originalQueue ? s.originalQueue.map(update) : null,
+          };
+        }),
     }),
     {
       name: 'sc-player',

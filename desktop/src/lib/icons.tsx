@@ -21,8 +21,8 @@ import {
   Disc3 as _Disc3,
   Download as _Download,
   ExternalLink as _ExternalLink,
-  Fullscreen as _Fullscreen,
   Eye as _Eye,
+  Fullscreen as _Fullscreen,
   Globe as _Globe,
   GripVertical as _GripVertical,
   Hash as _Hash,
@@ -36,14 +36,14 @@ import {
   ListPlus as _ListPlus,
   Loader2 as _Loader2,
   Lock as _Lock,
-  Maximize2 as _Maximize2,
-  PanelLeftClose as _PanelLeftClose,
-  PanelLeftOpen as _PanelLeftOpen,
   MapPin as _MapPin,
+  Maximize2 as _Maximize2,
   MessageCircle as _MessageCircle,
   MicVocal as _MicVocal,
   Minus as _Minus,
   Music as _Music,
+  PanelLeftClose as _PanelLeftClose,
+  PanelLeftOpen as _PanelLeftOpen,
   Pause as _Pause,
   Play as _Play,
   Plus as _Plus,
@@ -61,6 +61,7 @@ import {
   SlidersHorizontal as _SlidersHorizontal,
   Sparkles as _Sparkles,
   Square as _Square,
+  Star as _Star,
   Trash2 as _Trash2,
   User as _User,
   Users as _Users,
@@ -142,6 +143,7 @@ export const Shuffle = memo(_Shuffle);
 export const SkipBack = memo(_SkipBack);
 export const SkipForward = memo(_SkipForward);
 export const Sparkles = memo(_Sparkles);
+export const Star = memo(_Star);
 export const Square = memo(_Square);
 export const Trash2 = memo(_Trash2);
 export const Twitter = memo(({ size, className }: { size?: number; className?: string }) => (

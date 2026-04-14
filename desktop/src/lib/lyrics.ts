@@ -20,6 +20,9 @@ const DEV_LYRICS_DEBUG = import.meta.env.DEV;
 const LYRICS_MISS_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_TITLE_ONLY_ATTEMPTS = 6;
 const MAX_PRIORITY_TITLE_ONLY_ATTEMPTS = 3;
+// Bump to drop stale cache entries after title-variant search changes.
+const LYRICS_SEARCH_CACHE_VERSION = 14;
+export const LYRICS_SEARCH_QUERY_VERSION = 15;
 const LYRIC_PAUSE_MARKER = '♪♪♪';
 const PAUSE_SECTION_LINE_REGEX =
   /^(?:instrumental|interlude|solo|guitar solo|drum solo|проигрыш|проигрыши|инструментал|соло)(?:\s+(?:x|х|×)?\d+)?$/iu;
@@ -80,9 +83,6 @@ export interface LyricMotionHint {
 let musixmatchTokenPromise: Promise<string | null> | null = null;
 const lyricMotionHintCache = new Map<string, LyricMotionHint[]>();
 const lyricsMissCache = new Map<string, number>();
-// Bump to drop stale pseudo-sync and low-confidence Genius cache entries.
-const LYRICS_SEARCH_CACHE_VERSION = 12;
-export const LYRICS_SEARCH_QUERY_VERSION = 13;
 const REQUIRED_TITLE_IDENTITY_TOKENS = new Set(['aac', 'flac', 'm4a', 'mp3', 'ogg', 'opus', 'wav']);
 const TITLE_HINT_NOISE_PREFIXES = [
   'acoustic',
@@ -110,6 +110,39 @@ const TITLE_HINT_NOISE_PREFIXES = [
   'speed up',
   'video',
 ];
+const REUPLOAD_NOISE_PATTERNS = [
+  /\breupload\b/gi,
+  /\bnot\s+my\s+(?:music|song|track|audio)\b/gi,
+  /\bfree\s+dl\b/gi,
+  /\bhq\b/gi,
+  /\b\d{3,4}p\b/gi,
+  /\bno\s+copyright\b/gi,
+  /\[(?:repost|upload|dl|hq|free|oc)\]/gi,
+];
+const DERIVATIVE_VERSION_PATTERNS = [
+  /\bslowed(?:\s*\+\s*reverb)?\b/gi,
+  /\breverb(?:ed)?\b/gi,
+  /\bnightcore\b/gi,
+  /\bsped\s*up\b/gi,
+  /\blofi\b/gi,
+  /\bpitched\s*(?:up|down)\b/gi,
+  /\bbass\s*boost(?:ed)?\b/gi,
+];
+const PRODUCER_TAG_PATTERNS = [
+  /\bp[./]\s*[\p{L}\p{N}_.\s-]+/giu,
+  /\bprod\.?\s+by\s+[\p{L}\p{N}_.\s-]+/giu,
+  /\bprod[./]\s*[\p{L}\p{N}_.\s-]+/giu,
+  /\([\p{L}\p{N}_.\s-]+\s+on\s+the\s+beat\)/giu,
+];
+const EXTRA_TITLE_NOISE_PATTERNS = [
+  /\bsnippet\b/gi,
+  /\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b/g,
+  /\b\d{4}[-./]\d{1,2}[-./]\d{1,2}\b/g,
+  /\*+$/g,
+  /\b(?:official\s+)?(?:audio|video|lyrics?\s+video|visualizer|lyric\s+video)\b/gi,
+  /\bofficial\b/gi,
+  /\blyrics?\b/gi,
+];
 
 function logLyricsDebug(message: string, details?: unknown) {
   if (!DEV_LYRICS_DEBUG) return;
@@ -131,8 +164,8 @@ function warnLyricsDebug(message: string, details?: unknown) {
 
 function buildLyricsMissCacheKey(trackUrn: string, artist: string, title: string): string {
   const normalizedUrn = String(trackUrn || '').trim();
-  if (normalizedUrn) return `urn:${normalizedUrn}`;
-  return `query:${normalizeSearchText(artist)}::${normalizeSearchText(title)}`;
+  if (normalizedUrn) return `v${LYRICS_SEARCH_QUERY_VERSION}:urn:${normalizedUrn}`;
+  return `v${LYRICS_SEARCH_QUERY_VERSION}:query:${normalizeSearchText(artist)}::${normalizeSearchText(title)}`;
 }
 
 function pruneLyricsMissCache(now = Date.now()) {
@@ -237,7 +270,9 @@ function isLikelyLyricsBoilerplateLine(value: string): boolean {
     return true;
   }
 
-  return /\bcontributors?\b/i.test(trimmed) && /\b(translations?|romanizations?|lyrics)\b/i.test(trimmed);
+  return (
+    /\bcontributors?\b/i.test(trimmed) && /\b(translations?|romanizations?|lyrics)\b/i.test(trimmed)
+  );
 }
 
 function normalizePlainLyricsText(value: string): string | null {
@@ -266,7 +301,10 @@ function normalizePlainLyricsText(value: string): string | null {
   while (cleanedLines[0] === '') cleanedLines.shift();
   while (cleanedLines[cleanedLines.length - 1] === '') cleanedLines.pop();
 
-  const plain = cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const plain = cleanedLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   return plain && !isLyricsPlaceholderText(plain) ? plain : null;
 }
 
@@ -368,7 +406,9 @@ function parseLooseTimestamp(value: string): number | null {
   if (minuteSecondFraction) {
     const [, minutes, seconds, fraction] = minuteSecondFraction;
     if (Number(seconds) < 60) {
-      return normalizeLyricTimeNumber(Number(minutes) * 60 + Number(seconds) + parseTimestampFraction(fraction));
+      return normalizeLyricTimeNumber(
+        Number(minutes) * 60 + Number(seconds) + parseTimestampFraction(fraction),
+      );
     }
   }
 
@@ -389,7 +429,9 @@ function parseLooseTimestamp(value: string): number | null {
   if (minuteSecond) {
     const [, minutes, seconds, fraction] = minuteSecond;
     if (Number(seconds) < 60) {
-      return normalizeLyricTimeNumber(Number(minutes) * 60 + Number(seconds) + parseTimestampFraction(fraction));
+      return normalizeLyricTimeNumber(
+        Number(minutes) * 60 + Number(seconds) + parseTimestampFraction(fraction),
+      );
     }
   }
 
@@ -835,9 +877,7 @@ function extractLegacyGeniusLyricsFromHtml(html: string): string | null {
   }
 
   const containerMatches = [
-    ...html.matchAll(
-      /<div[^>]*data-lyrics-container\s*=\s*["']true["'][^>]*>([\s\S]*?)<\/div>/gi,
-    ),
+    ...html.matchAll(/<div[^>]*data-lyrics-container\s*=\s*["']true["'][^>]*>([\s\S]*?)<\/div>/gi),
   ];
   if (containerMatches.length > 0) {
     const plain = cleanGeniusLyricsText(
@@ -1243,8 +1283,12 @@ export function buildPseudoSyncedLyrics(
 
   if (preparedComments.length < 2) return null;
 
-  const anchors: Array<{ metaIndex: number; preparedIndex: number; timeSec: number; score: number }> =
-    [];
+  const anchors: Array<{
+    metaIndex: number;
+    preparedIndex: number;
+    timeSec: number;
+    score: number;
+  }> = [];
   let minMetaIndex = 0;
 
   for (const comment of preparedComments) {
@@ -1982,6 +2026,107 @@ function stripBrackets(s: string): string {
     .trim();
 }
 
+function stripDecorative(s: string): string {
+  return String(s || '')
+    .replace(/[\u2000-\u206F\u2E00-\u2E7F★✦•·∙｜»«◆◇○●]/gu, ' ')
+    .replace(/[\u{1F300}-\u{1F9FF}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeUnderscores(s: string): string {
+  return String(s || '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripNoise(title: string): string {
+  const raw = String(title || '').trim();
+  if (!raw) return '';
+
+  let cleaned = raw;
+  for (const pattern of PRODUCER_TAG_PATTERNS) cleaned = cleaned.replace(pattern, ' ');
+  for (const pattern of DERIVATIVE_VERSION_PATTERNS) cleaned = cleaned.replace(pattern, ' ');
+  for (const pattern of REUPLOAD_NOISE_PATTERNS) cleaned = cleaned.replace(pattern, ' ');
+  for (const pattern of EXTRA_TITLE_NOISE_PATTERNS) cleaned = cleaned.replace(pattern, ' ');
+
+  return cleaned
+    .replace(/\(\s*\)/g, '')
+    .replace(/\[\s*\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractReuploadCleanTitle(title: string): string | null {
+  const raw = String(title || '').trim();
+  if (!raw) return null;
+
+  const cleaned = stripNoise(raw);
+
+  return cleaned && cleaned !== raw ? cleaned : null;
+}
+
+function collectTitleVariants(title: string): string[] {
+  const original = String(title || '').trim();
+  if (!original) return [];
+
+  const variants: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string | null | undefined) => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed || trimmed === original) return;
+    const key = normalizeSearchText(trimmed);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    variants.push(trimmed);
+  };
+
+  const noDecor = stripDecorative(original);
+  const noNoise = stripNoise(original);
+  const noUnderscore = normalizeUnderscores(original);
+
+  push(noNoise);
+  push(noDecor);
+  push(noUnderscore);
+  push(stripNoise(noDecor));
+  push(normalizeUnderscores(noDecor));
+  push(stripDecorative(noNoise));
+  push(normalizeUnderscores(noNoise));
+  push(normalizeUnderscores(stripNoise(stripDecorative(original))));
+
+  return variants;
+}
+
+function splitMultiArtistTitle(title: string): string[] {
+  const raw = String(title || '').trim();
+  if (!raw) return [];
+
+  const cleaned = extractReuploadCleanTitle(raw) ?? raw;
+  const parts = cleaned
+    .split(/\s*(?:\+|&|×|x)\s*/iu)
+    .map((part) => {
+      let next = part.trim();
+      for (const pattern of PRODUCER_TAG_PATTERNS) {
+        next = next.replace(pattern, ' ').trim();
+      }
+      return next.replace(/\s+/g, ' ').trim();
+    })
+    .filter(Boolean);
+
+  return Array.from(new Set(parts));
+}
+
+function extractArtistFromDescriptionFirstLine(description: string): string | null {
+  const firstLine =
+    String(description || '')
+      .split('\n')[0]
+      ?.trim() || '';
+  if (!firstLine) return null;
+  const parsed = splitArtistTitle(firstLine);
+  return parsed?.[0] ?? null;
+}
+
 /** Strip everything non-alphanumeric (keep unicode letters) */
 function alphaOnly(s: string): string {
   return s
@@ -2081,7 +2226,7 @@ function normalizeSearchText(value: string): string {
 
 const STYLIZED_SYMBOL_TO_LATIN_MAP: Record<string, string> = {
   '!': 'i',
-  '$': 's',
+  $: 's',
   '+': 't',
   '0': 'o',
   '1': 'i',
@@ -2095,7 +2240,7 @@ const STYLIZED_SYMBOL_TO_LATIN_MAP: Record<string, string> = {
 };
 
 const STYLIZED_SYMBOL_TO_CYRILLIC_MAP: Record<string, string> = {
-  '$': 'с',
+  $: 'с',
   '0': 'о',
   '1': 'и',
   '3': 'е',
@@ -2131,10 +2276,7 @@ function compactSearchText(value: string): string {
 function looksStylizedSearchText(value: string): boolean {
   const raw = String(value || '');
   if (!raw) return false;
-  return (
-    /[!$+013457:@|]/.test(raw) ||
-    (/[а-яёіїєґ]/i.test(raw) && /[a-z]/i.test(raw))
-  );
+  return /[!$+013457:@|]/.test(raw) || (/[а-яёіїєґ]/i.test(raw) && /[a-z]/i.test(raw));
 }
 
 function collectStylizedTextVariants(value: string): string[] {
@@ -2280,16 +2422,20 @@ function collectLooseTitleOnlyCandidates(values: Array<string | null | undefined
   for (const value of values) {
     const raw = String(value || '').trim();
     for (const candidate of [
+      stripDecorative(raw),
+      extractReuploadCleanTitle(raw),
       stripBrackets(raw),
       clean(raw),
+      stripDecorative(clean(raw)),
       stripBrackets(clean(raw)),
       cleanLoose(raw),
+      stripDecorative(cleanLoose(raw)),
       stripBrackets(cleanLoose(raw)),
       ...collectStylizedTextVariants(raw),
       ...collectUploadStyleTitleHints(value),
       ...collectParentheticalTitleHints(value),
     ]) {
-      push(candidate);
+      if (candidate) push(candidate);
     }
   }
 
@@ -2546,7 +2692,10 @@ function buildGeniusArtistUrls(artist: string): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
 
-  for (const artistSlug of getTextSearchVariants(artist).map(toGeniusSlugPart).filter(Boolean).slice(0, 4)) {
+  for (const artistSlug of getTextSearchVariants(artist)
+    .map(toGeniusSlugPart)
+    .filter(Boolean)
+    .slice(0, 4)) {
     const url = `https://genius.com/artists/${artistSlug}`;
     if (seen.has(url)) continue;
     seen.add(url);
@@ -2676,7 +2825,10 @@ async function fetchGeniusArtistSongCandidates(
   if (artistCandidate.url) {
     try {
       const html = await requestText(artistCandidate.url, signal);
-      for (const candidate of extractGeniusSongCandidatesFromArtistHtml(html, artistCandidate.name)) {
+      for (const candidate of extractGeniusSongCandidatesFromArtistHtml(
+        html,
+        artistCandidate.name,
+      )) {
         pushCandidate(candidate);
       }
     } catch {
@@ -2800,7 +2952,11 @@ function collectArtistAliasHints(values: Array<string | null | undefined>): stri
     if (!normalized || seen.has(normalized)) return;
     if (!/^[a-z0-9_ ]{3,32}$/i.test(normalized)) return;
     if (!/[a-z]/i.test(normalized)) return;
-    if (/^(?:http|https|www|soundcloud|telegram|tme|link|links|official|music|artist)$/i.test(normalized)) {
+    if (
+      /^(?:http|https|www|soundcloud|telegram|tme|link|links|official|music|artist)$/i.test(
+        normalized,
+      )
+    ) {
       return;
     }
     seen.add(normalized);
@@ -2892,10 +3048,18 @@ function buildLyricsSearchProfile(
 ): LyricsSearchProfile {
   const originalTitle = String(options.originalTitle || requestedTitle || '').trim();
   const uploaderUsername = String(options.uploaderUsername || requestedArtist || '').trim();
+  const descriptionArtistHint = options.description
+    ? extractArtistFromDescriptionFirstLine(options.description)
+    : null;
+  const titleArtistHints = Array.from(
+    new Set([...splitMultiArtistTitle(requestedTitle), ...splitMultiArtistTitle(originalTitle)]),
+  );
   const artistAliasHints = collectArtistAliasHints([
     options.description,
     options.uploaderUsername,
     requestedArtist,
+    descriptionArtistHint,
+    ...titleArtistHints,
   ]);
   const durationSec =
     options.durationMs != null && Number.isFinite(options.durationMs)
@@ -2909,20 +3073,29 @@ function buildLyricsSearchProfile(
     uploaderUsername,
     durationSec,
     requiredTitleTokens: collectRequiredTitleTokens([requestedTitle, originalTitle]),
-    artistVariants: collectSearchVariants([requestedArtist, uploaderUsername, ...artistAliasHints]),
+    artistVariants: collectSearchVariants([
+      requestedArtist,
+      uploaderUsername,
+      descriptionArtistHint,
+      ...titleArtistHints,
+      ...artistAliasHints,
+    ]),
     titleVariants: collectSearchVariants([requestedTitle, originalTitle]),
     combinedVariants: collectSearchVariants([
       `${requestedArtist} ${requestedTitle}`,
       `${uploaderUsername} ${originalTitle}`,
       `${requestedArtist} ${originalTitle}`,
       `${uploaderUsername} ${requestedTitle}`,
+      ...titleArtistHints.map((artistHint) => `${artistHint} ${requestedTitle}`),
+      ...titleArtistHints.map((artistHint) => `${artistHint} ${originalTitle}`),
       ...artistAliasHints.map((artistAlias) => `${artistAlias} ${requestedTitle}`),
       ...artistAliasHints.map((artistAlias) => `${artistAlias} ${originalTitle}`),
       requestedTitle,
       originalTitle,
     ]),
     metadataTokens: buildLyricsMetadataTokens(options),
-    allowLooseTitleOnly: canUseLooseTitleOnly(requestedTitle) || canUseLooseTitleOnly(originalTitle),
+    allowLooseTitleOnly:
+      canUseLooseTitleOnly(requestedTitle) || canUseLooseTitleOnly(originalTitle),
   };
 }
 
@@ -3025,10 +3198,7 @@ function isAcceptedLyricsCandidateScore(
   if (profile.artistVariants.length > 0 && normalizedCandidateArtist) {
     const softMinArtistScore = requiresStrongArtistMatch ? 0.22 : 0.16;
     const softMinCombinedScore = requiresStrongArtistMatch ? 0.58 : 0.52;
-    if (
-      scored.artistScore < softMinArtistScore &&
-      scored.combinedScore < softMinCombinedScore
-    ) {
+    if (scored.artistScore < softMinArtistScore && scored.combinedScore < softMinCombinedScore) {
       return false;
     }
   }
@@ -3064,11 +3234,15 @@ function pickBestLyricsCandidate<T>(
       const artist = String(meta.artist || '').trim();
       const extraText = String(meta.extraText || '').trim();
       const durationSec =
-        meta.durationSec != null && Number.isFinite(meta.durationSec) ? Number(meta.durationSec) : null;
+        meta.durationSec != null && Number.isFinite(meta.durationSec)
+          ? Number(meta.durationSec)
+          : null;
       const scored = scoreLyricsCandidate(profile, artist, title, extraText, durationSec);
       return { item, ...scored };
     })
-    .sort((a, b) => b.score - a.score || b.titleScore - a.titleScore || b.artistScore - a.artistScore);
+    .sort(
+      (a, b) => b.score - a.score || b.titleScore - a.titleScore || b.artistScore - a.artistScore,
+    );
 
   const best = ranked[0];
   if (!best) return null;
@@ -3124,24 +3298,31 @@ async function searchLrclib(
   title: string,
   profile: LyricsSearchProfile,
   signal: AbortSignal,
+  syncedOnly = false,
 ): Promise<LyricsResult | null> {
+  const tryFetch = async (params: Record<string, string>) => {
+    const r = await lrclibFetch(params, profile, signal);
+    if (syncedOnly && r && !r.synced?.length) return null;
+    return r ?? null;
+  };
+
   // 1. Exact
-  let r = await lrclibFetch({ artist_name: artist, track_name: title }, profile, signal);
+  let r = await tryFetch({ artist_name: artist, track_name: title });
   if (r) return r;
   // 2. Cleaned
   const ca = clean(artist);
   const ct = clean(title);
-  r = await lrclibFetch({ artist_name: ca, track_name: ct }, profile, signal);
+  r = await tryFetch({ artist_name: ca, track_name: ct });
   if (r) return r;
   // 3. Alpha-only
   const aa = alphaOnly(ca);
   const at = alphaOnly(ct);
   if (aa !== ca || at !== ct) {
-    r = await lrclibFetch({ artist_name: aa, track_name: at }, profile, signal);
+    r = await tryFetch({ artist_name: aa, track_name: at });
     if (r) return r;
   }
   // 4. Free-text q=
-  r = await lrclibFetch({ q: alphaOnly(`${artist} ${title}`) }, profile, signal);
+  r = await tryFetch({ q: alphaOnly(`${artist} ${title}`) });
   return r;
 }
 
@@ -3171,7 +3352,10 @@ async function searchNetease(
     }>(`${NCM_API}/search?keywords=${q}&type=1`, signal);
     const songs = searchData?.result?.songs || [];
     const bestSong = pickBestLyricsCandidate(songs, profile, (song) => ({
-      artist: (song.artists || song.ar || []).map((entry) => entry?.name || '').filter(Boolean).join(' '),
+      artist: (song.artists || song.ar || [])
+        .map((entry) => entry?.name || '')
+        .filter(Boolean)
+        .join(' '),
       title: song.name,
       extraText: song.album?.name || song.al?.name || '',
       durationSec:
@@ -3315,7 +3499,9 @@ async function searchGenius(
 
         for (const section of searchData?.response?.sections || []) {
           for (const hit of section.hits || []) {
-            const resultType = normalizeSearchText(String(hit.result?._type || section.type || hit.type || ''));
+            const resultType = normalizeSearchText(
+              String(hit.result?._type || section.type || hit.type || ''),
+            );
 
             if (resultType === 'song') {
               const candidate = toGeniusCandidate(hit);
@@ -3346,7 +3532,10 @@ async function searchGenius(
       });
     }
 
-    if (artistCandidates.length > 0 && (hasStrongTitleOnlyHint(title) || candidatesByUrl.size < 4)) {
+    if (
+      artistCandidates.length > 0 &&
+      (hasStrongTitleOnlyHint(title) || candidatesByUrl.size < 10)
+    ) {
       for (const artistCandidate of artistCandidates.slice(0, 3)) {
         for (const candidate of await fetchGeniusArtistSongCandidates(artistCandidate, signal)) {
           if (!candidatesByUrl.has(candidate.url)) {
@@ -3373,7 +3562,7 @@ async function searchGenius(
       ),
     );
 
-    for (const candidate of acceptedCandidates.slice(0, 6)) {
+    for (const candidate of acceptedCandidates.slice(0, 12)) {
       const html = await requestText(candidate.url, signal);
       const result = normalizeLyricsResult({
         plain: normalizeGeniusPlainLyrics(extractGeniusLyricsFromHtml(html) || ''),
@@ -3426,6 +3615,68 @@ async function searchPlainLyricsProviders(
     () => searchGenius(artist, title, signal),
     () => searchTextyl(artist, title, signal),
   ]);
+}
+
+async function searchSyncedParallel(
+  artist: string,
+  title: string,
+  profile: LyricsSearchProfile,
+  signal: AbortSignal,
+): Promise<LyricsResult | null> {
+  const candidates: Array<() => Promise<LyricsResult | null>> = [
+    () => searchLrclib(artist, title, profile, signal, true),
+    () => searchMusixmatchSynced(artist, title, signal),
+  ];
+  if (ENABLE_NCM) {
+    candidates.push(() => searchNetease(artist, title, profile, signal));
+  }
+
+  return await new Promise<LyricsResult | null>((resolve) => {
+    let pending = candidates.length;
+    let settled = false;
+
+    for (const candidate of candidates) {
+      candidate()
+        .then((result) => {
+          if (settled) return;
+          if (result?.synced?.length) {
+            settled = true;
+            resolve(result);
+            return;
+          }
+          pending -= 1;
+          if (pending === 0) resolve(null);
+        })
+        .catch(() => {
+          if (settled) return;
+          pending -= 1;
+          if (pending === 0) resolve(null);
+        });
+    }
+  });
+}
+
+async function runChainFull(
+  artist: string,
+  title: string,
+  profile: LyricsSearchProfile,
+  signal: AbortSignal,
+): Promise<LyricsResult | null> {
+  const trimmedArtist = String(artist || '').trim();
+  const trimmedTitle = String(title || '').trim();
+  if (!trimmedTitle) return null;
+
+  let r = await searchLrclib(trimmedArtist, trimmedTitle, profile, signal);
+  if (r) return r;
+  r = await searchMusixmatchSynced(trimmedArtist, trimmedTitle, signal);
+  if (r) return r;
+  r = await searchPlainLyricsProviders(trimmedArtist, trimmedTitle, signal);
+  if (r) return r;
+  if (ENABLE_NCM) {
+    r = await searchNetease(trimmedArtist, trimmedTitle, profile, signal);
+    if (r) return r;
+  }
+  return null;
 }
 
 // ── Main export ───────────────────────────────────────────────
@@ -3725,6 +3976,9 @@ export async function searchLyrics(
   const requestedTitle = String(scTitle || '').trim();
   const uploaderUsername = String(options.uploaderUsername || requestedArtist || '').trim();
   const originalTitle = String(options.originalTitle || requestedTitle || '').trim();
+  const requestedTitleVariants = collectTitleVariants(requestedTitle);
+  const originalTitleVariants =
+    originalTitle !== requestedTitle ? collectTitleVariants(originalTitle) : [];
   const artistAliasHints = collectArtistAliasHints([
     requestedArtist,
     uploaderUsername,
@@ -3732,8 +3986,27 @@ export async function searchLyrics(
   ]);
   const parsedRequested = splitArtistTitle(requestedTitle);
   const parsedOriginal = splitArtistTitle(originalTitle);
-  const requiredTitleTokens = collectRequiredTitleTokens([requestedTitle, originalTitle]);
-  const extractedTitleHints = collectLooseTitleOnlyCandidates([requestedTitle, originalTitle]).slice(0, 4);
+  const extractedTitleHints = collectLooseTitleOnlyCandidates([
+    requestedTitle,
+    originalTitle,
+  ]).slice(0, 4);
+  const reuploadCleanTitle =
+    extractReuploadCleanTitle(requestedTitle) ?? extractReuploadCleanTitle(originalTitle);
+  const decorativeCleanTitle = (() => {
+    const requestedDecorative = stripDecorative(requestedTitle);
+    if (requestedDecorative && requestedDecorative !== requestedTitle) return requestedDecorative;
+    const originalDecorative = stripDecorative(originalTitle);
+    return originalDecorative && originalDecorative !== originalTitle ? originalDecorative : null;
+  })();
+  const requiredTitleTokens = collectRequiredTitleTokens([
+    reuploadCleanTitle ?? requestedTitle,
+    decorativeCleanTitle ?? originalTitle,
+    originalTitle,
+  ]);
+  const multiArtistTitleParts = splitMultiArtistTitle(reuploadCleanTitle ?? requestedTitle);
+  const descriptionArtistHint = options.description
+    ? extractArtistFromDescriptionFirstLine(options.description)
+    : null;
   const missCacheKey = buildLyricsMissCacheKey(
     trackUrn,
     requestedArtist || uploaderUsername,
@@ -3812,6 +4085,11 @@ export async function searchLyrics(
     for (const titleHint of [
       requestedTitle,
       originalTitle,
+      ...requestedTitleVariants,
+      ...originalTitleVariants,
+      reuploadCleanTitle,
+      decorativeCleanTitle,
+      ...multiArtistTitleParts,
       stripBrackets(requestedTitle),
       stripBrackets(originalTitle),
       parsedRequested?.[1],
@@ -3821,29 +4099,174 @@ export async function searchLyrics(
       pushPriorityTitleOnlyAttempt(titleHint || '');
     }
 
-    const runChain = async (artist: string, title: string) => {
+    const runSyncedChain = async (artist: string, title: string) => {
       const trimmedArtist = String(artist || '').trim();
       const trimmedTitle = String(title || '').trim();
       if (!trimmedTitle) return null;
-
       const profile = buildLyricsSearchProfile(trimmedArtist, trimmedTitle, {
         ...options,
         uploaderUsername,
         originalTitle,
       });
-
-      let r = await searchLrclib(trimmedArtist, trimmedTitle, profile, sig);
-      if (r) return r;
-      r = await searchMusixmatchSynced(trimmedArtist, trimmedTitle, sig);
-      if (r) return r;
-      r = await searchPlainLyricsProviders(trimmedArtist, trimmedTitle, sig);
-      if (r) return r;
-      if (ENABLE_NCM) {
-        r = await searchNetease(trimmedArtist, trimmedTitle, profile, sig);
-        if (r) return r;
-      }
-      return null;
+      return searchSyncedParallel(trimmedArtist, trimmedTitle, profile, sig);
     };
+
+    if (requestedTitle) {
+      const syncedExact = await runSyncedChain(requestedArtist, requestedTitle);
+      if (syncedExact) {
+        logLyricsDebug('resolved synced lyrics (exact pair, phase 1)', { trackUrn });
+        return await saveMatchedLyrics(syncedExact);
+      }
+
+      const strippedRequested = stripBrackets(requestedTitle);
+      if (requestedArtist && strippedRequested && strippedRequested !== requestedTitle) {
+        const syncedStripped = await runSyncedChain(requestedArtist, strippedRequested);
+        if (syncedStripped) {
+          logLyricsDebug('resolved synced lyrics (stripped title, phase 1)', { trackUrn });
+          return await saveMatchedLyrics(syncedStripped);
+        }
+      }
+
+      for (const titleVariant of [...requestedTitleVariants, ...originalTitleVariants]) {
+        const syncedVariant = await runSyncedChain(requestedArtist, titleVariant);
+        if (syncedVariant) {
+          logLyricsDebug('resolved synced lyrics (title variant, phase 1)', {
+            trackUrn,
+            titleVariant,
+          });
+          return await saveMatchedLyrics(syncedVariant);
+        }
+      }
+
+      if (requestedArtist) {
+        for (const splitTitle of multiArtistTitleParts) {
+          const syncedSplit = await runSyncedChain(requestedArtist, splitTitle);
+          if (syncedSplit) {
+            logLyricsDebug('resolved synced lyrics (multi-title split, phase 1)', {
+              trackUrn,
+              splitTitle,
+            });
+            return await saveMatchedLyrics(syncedSplit);
+          }
+
+          if (uploaderUsername && uploaderUsername !== requestedArtist) {
+            const syncedUploaderSplit = await runSyncedChain(uploaderUsername, splitTitle);
+            if (syncedUploaderSplit) {
+              logLyricsDebug('resolved synced lyrics (uploader + multi-title split, phase 1)', {
+                trackUrn,
+                splitTitle,
+              });
+              return await saveMatchedLyrics(syncedUploaderSplit);
+            }
+          }
+
+          for (const relatedArtist of multiArtistTitleParts) {
+            if (relatedArtist === splitTitle) continue;
+            const syncedRelatedSplit = await runSyncedChain(relatedArtist, splitTitle);
+            if (syncedRelatedSplit) {
+              logLyricsDebug('resolved synced lyrics (split artist + split title, phase 1)', {
+                trackUrn,
+                relatedArtist,
+                splitTitle,
+              });
+              return await saveMatchedLyrics(syncedRelatedSplit);
+            }
+          }
+        }
+
+        for (const titleAttempt of priorityTitleOnlyAttempts.slice(
+          0,
+          MAX_PRIORITY_TITLE_ONLY_ATTEMPTS,
+        )) {
+          const syncedTitleOnly = await runSyncedChain('', titleAttempt);
+          if (syncedTitleOnly) {
+            logLyricsDebug('resolved synced lyrics (priority title-only, phase 1)', {
+              trackUrn,
+              titleAttempt,
+            });
+            return await saveMatchedLyrics(syncedTitleOnly);
+          }
+        }
+      }
+    }
+
+    const runChain = async (artist: string, title: string) => {
+      const trimmedArtist = String(artist || '').trim();
+      const trimmedTitle = String(title || '').trim();
+      if (!trimmedTitle) return null;
+      const profile = buildLyricsSearchProfile(trimmedArtist, trimmedTitle, {
+        ...options,
+        uploaderUsername,
+        originalTitle,
+      });
+      return runChainFull(trimmedArtist, trimmedTitle, profile, sig);
+    };
+
+    if (requestedTitle) {
+      const primaryExactResult = await runChain(requestedArtist, requestedTitle);
+      if (primaryExactResult) return await saveMatchedLyrics(primaryExactResult);
+
+      for (const splitTitle of multiArtistTitleParts) {
+        const splitResult = await runChain(requestedArtist, splitTitle);
+        if (splitResult) return await saveMatchedLyrics(splitResult);
+
+        if (uploaderUsername && uploaderUsername !== requestedArtist) {
+          const uploaderSplitResult = await runChain(uploaderUsername, splitTitle);
+          if (uploaderSplitResult) return await saveMatchedLyrics(uploaderSplitResult);
+        }
+
+        for (const relatedArtist of multiArtistTitleParts) {
+          if (relatedArtist === splitTitle) continue;
+          const relatedSplitResult = await runChain(relatedArtist, splitTitle);
+          if (relatedSplitResult) return await saveMatchedLyrics(relatedSplitResult);
+        }
+      }
+
+      const strippedRequestedTitle = stripBrackets(requestedTitle);
+      if (requestedArtist && strippedRequestedTitle && strippedRequestedTitle !== requestedTitle) {
+        const strippedPairResult = await runChain(requestedArtist, strippedRequestedTitle);
+        if (strippedPairResult) {
+          logLyricsDebug('resolved lyrics via stripped title fallback', {
+            trackUrn,
+            requestedArtist,
+            requestedTitle,
+            titleAttempt: strippedRequestedTitle,
+          });
+          return await saveMatchedLyrics(strippedPairResult);
+        }
+      }
+
+      for (const titleVariant of [...requestedTitleVariants, ...originalTitleVariants]) {
+        const variantResult = await runChain(requestedArtist, titleVariant);
+        if (variantResult) {
+          logLyricsDebug('resolved lyrics via title variant fallback', {
+            trackUrn,
+            requestedArtist,
+            requestedTitle,
+            titleAttempt: titleVariant,
+          });
+          return await saveMatchedLyrics(variantResult);
+        }
+      }
+
+      if (requestedArtist) {
+        for (const titleAttempt of priorityTitleOnlyAttempts.slice(
+          0,
+          MAX_PRIORITY_TITLE_ONLY_ATTEMPTS,
+        )) {
+          const titleOnlyResult = await runChain('', titleAttempt);
+          if (titleOnlyResult) {
+            logLyricsDebug('resolved lyrics via early title-only fallback', {
+              trackUrn,
+              requestedArtist,
+              requestedTitle,
+              titleAttempt,
+            });
+            return await saveMatchedLyrics(titleOnlyResult);
+          }
+        }
+      }
+    }
 
     const pairAttempts: Array<{ artist: string; title: string }> = [];
     const seenPairs = new Set<string>();
@@ -3858,11 +4281,16 @@ export async function searchLyrics(
       pairAttempts.push({ artist: trimmedArtist, title: trimmedTitle });
     };
 
-    pushPairAttempt(requestedArtist, requestedTitle);
     for (const artistAlias of artistAliasHints) {
       pushPairAttempt(artistAlias, requestedTitle);
       if (originalTitle && originalTitle !== requestedTitle) {
         pushPairAttempt(artistAlias, originalTitle);
+      }
+      if (reuploadCleanTitle) {
+        pushPairAttempt(artistAlias, reuploadCleanTitle);
+      }
+      if (decorativeCleanTitle) {
+        pushPairAttempt(artistAlias, decorativeCleanTitle);
       }
       for (const titleHint of extractedTitleHints) {
         pushPairAttempt(artistAlias, titleHint);
@@ -3877,8 +4305,34 @@ export async function searchLyrics(
         pushPairAttempt(uploaderUsername, titleHint);
       }
     }
+    for (const titleVariant of [...requestedTitleVariants, ...originalTitleVariants]) {
+      pushPairAttempt(requestedArtist, titleVariant);
+      pushPairAttempt(uploaderUsername, titleVariant);
+      if (descriptionArtistHint) pushPairAttempt(descriptionArtistHint, titleVariant);
+    }
     if (parsedRequested) {
       pushPairAttempt(parsedRequested[0], parsedRequested[1]);
+    }
+    for (const splitTitle of multiArtistTitleParts) {
+      pushPairAttempt(requestedArtist, splitTitle);
+      if (descriptionArtistHint) pushPairAttempt(descriptionArtistHint, splitTitle);
+      for (const relatedArtist of multiArtistTitleParts) {
+        if (relatedArtist !== splitTitle) {
+          pushPairAttempt(relatedArtist, splitTitle);
+        }
+      }
+    }
+    if (reuploadCleanTitle) {
+      pushPairAttempt(requestedArtist, reuploadCleanTitle);
+      pushPairAttempt(uploaderUsername, reuploadCleanTitle);
+      if (descriptionArtistHint) pushPairAttempt(descriptionArtistHint, reuploadCleanTitle);
+      const parsedReupload = splitArtistTitle(reuploadCleanTitle);
+      if (parsedReupload) pushPairAttempt(parsedReupload[0], parsedReupload[1]);
+    }
+    if (decorativeCleanTitle) {
+      const parsedDecorative = splitArtistTitle(decorativeCleanTitle);
+      if (parsedDecorative) pushPairAttempt(parsedDecorative[0], parsedDecorative[1]);
+      else pushPairAttempt(requestedArtist, decorativeCleanTitle);
     }
     pushPairAttempt(uploaderUsername, originalTitle);
     if (parsedOriginal) {
@@ -3936,6 +4390,8 @@ export async function searchLyrics(
     for (const titleHint of collectLooseTitleOnlyCandidates([
       requestedTitle,
       originalTitle,
+      ...requestedTitleVariants,
+      ...originalTitleVariants,
       parsedRequested?.[1],
       parsedOriginal?.[1],
       ...pairAttempts.map((attempt) => attempt.title),
@@ -3962,7 +4418,10 @@ export async function searchLyrics(
       }
     }
 
-    for (const titleAttempt of priorityTitleOnlyAttempts.slice(0, MAX_PRIORITY_TITLE_ONLY_ATTEMPTS)) {
+    for (const titleAttempt of priorityTitleOnlyAttempts.slice(
+      0,
+      MAX_PRIORITY_TITLE_ONLY_ATTEMPTS,
+    )) {
       logLyricsDebug('trying late Genius title-only fallback', {
         trackUrn,
         title: titleAttempt,

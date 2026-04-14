@@ -54,9 +54,10 @@
     "tags": "Tags",
     "commentAt": "at",
     "lyrics": "Lyrics",
-    "lyricsNotFound": "Lyrics not found",
+    "lyricsNotFound": "Lyrics not found :(",
     "lyricsNotFoundHint": "Try searching on Genius.com",
     "lyricsLoading": "Searching lyrics...",
+    "viewArtwork": "View",
     "download": "Download",
     "downloaded": "Saved",
     "preview": "Preview"

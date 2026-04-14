@@ -53,7 +53,9 @@
     "sessionExpired": "Сессия истекла",
     "reloginNow": "Войти снова",
     "copyLink": "Скопировать ссылку",
-    "copied": "Скопировано!"
+    "copied": "Скопировано!",
+    "restoringSession": "Восстановление сессии",
+    "startingApp": "Запуск приложения..."
   },
   "search": {
     "placeholder": "Треки, плейлисты, пользователи...",
@@ -81,11 +83,12 @@
     "tags": "Теги",
     "commentAt": "на",
     "lyrics": "Текст песни",
-    "lyricsNotFound": "Текст не найден",
+    "lyricsNotFound": "Текст трека не найден :(",
     "lyricsNotFoundHint": "Попробуйте поискать на Genius.com",
     "manualSearch": "Ручной поиск",
     "search": "Искать",
     "lyricsLoading": "Ищем текст...",
+    "viewArtwork": "Просмотр",
     "resizeLayout": "Изменить пропорции",
     "download": "Скачать",
     "downloaded": "Скачано",
@@ -503,5 +506,25 @@
     "back": "Назад",
     "seeAll": "Показать все",
     "cancel": "Отмена"
+  },
+  "star": {
+    "title": "Подписка Star",
+    "active": "Активна",
+    "getIt": "Узнать больше",
+    "modalTitle": "Star",
+    "modalSub": "Поддержи проект — получи бонусы",
+    "perkGoPlus": "Доступ к GO+ трекам",
+    "perkServer": "Выделенный сервер стриминга",
+    "perkHQ": "Больше HQ треков",
+    "bypassWhitelist": "Обход белых списков и лучшая доступность",
+    "perkSupport": "Ну и просто поддержать проект монеткой.\nКоличество бонусов будет увеличиваться!",
+    "howTo": "Как получить",
+    "step1": "Перейдите на Boosty",
+    "step2": "Привяжите Discord к своему Boosty",
+    "step3": "Зайдите на наш Discord-сервер",
+    "step4": "Купите подписку на Boosty",
+    "step5": "В нашем Discord-сервере привяжите SoundCloud командой /sc-link",
+    "goBoosty": "Boosty",
+    "goDiscord": "Discord"
   }
 }

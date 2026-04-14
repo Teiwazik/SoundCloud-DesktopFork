@@ -531,6 +531,18 @@ body,
   animation: zoomIn 0.4s var(--ease-apple) both;
 }
 
+@keyframes star-float {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translateY(-6px) scale(1.3);
+    opacity: 0.8;
+  }
+}
+
 @keyframes soundwavePulse {
   0%,
   100% {
@@ -563,21 +575,21 @@ body,
 @keyframes dialogContentIn {
   from {
     opacity: 0;
-    transform: translate(-50%, -48%) scale(0.96);
+    transform: scale(0.96);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: scale(1);
   }
 }
 @keyframes dialogContentOut {
   from {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: scale(1);
   }
   to {
     opacity: 0;
-    transform: translate(-50%, -48%) scale(0.96);
+    transform: scale(0.96);
   }
 }
 

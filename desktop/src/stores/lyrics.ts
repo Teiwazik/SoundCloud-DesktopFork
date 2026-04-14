@@ -42,7 +42,7 @@ export const useFullscreenPanelStore = create<FullscreenPanelState>()((set) => (
   transitionDirection: 'none',
   openAnimation: 'default',
   closeAnimation: 'none',
-  lyricsSplitRatio: 0.5,
+  lyricsSplitRatio: 0.45,
   setMode: (mode) => set({ mode }),
   setTransitionDirection: (dir) => set({ transitionDirection: dir }),
   setOpenAnimation: (animation) => set({ openAnimation: animation }),
@@ -59,6 +59,8 @@ export const useFullscreenPanelStore = create<FullscreenPanelState>()((set) => (
       clearTimeout(fullscreenCloseTimer);
       fullscreenCloseTimer = null;
     }
+    useArtworkStore.setState({ open: false });
+    useLyricsStore.setState({ open: false });
     set({ transitionDirection: 'none', closeAnimation: 'toMiniPlayer' });
     fullscreenCloseTimer = setTimeout(() => {
       set({
@@ -75,7 +77,14 @@ export const useFullscreenPanelStore = create<FullscreenPanelState>()((set) => (
       clearTimeout(fullscreenCloseTimer);
       fullscreenCloseTimer = null;
     }
-    set({ mode: 'none', transitionDirection: 'none', openAnimation: 'default', closeAnimation: 'none' });
+    useArtworkStore.setState({ open: false });
+    useLyricsStore.setState({ open: false });
+    set({
+      mode: 'none',
+      transitionDirection: 'none',
+      openAnimation: 'default',
+      closeAnimation: 'none',
+    });
   },
 }));
 

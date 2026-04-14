@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { useShallow } from 'zustand/shallow';
@@ -20,26 +21,6 @@ import { useAppStatusStore } from './stores/app-status';
 import { useAuthStore } from './stores/auth';
 
 const AUTH_BOOTSTRAP_TIMEOUT_MS = 12000;
-
-function AppBootScreen({ label }: { label: string }) {
-  return (
-    <div className="h-screen relative overflow-hidden bg-[rgb(8,8,10)] text-white">
-      <div className="absolute inset-0">
-        <div className="absolute -top-16 left-[12%] h-72 w-72 rounded-full bg-accent/[0.12] blur-[120px]" />
-        <div className="absolute bottom-0 right-[10%] h-80 w-80 rounded-full bg-cyan-400/[0.08] blur-[140px]" />
-      </div>
-      <div className="relative flex h-full items-center justify-center">
-        <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-[28px] border border-white/8 bg-white/[0.04] px-7 py-8 text-center backdrop-blur-xl">
-          <div className="h-10 w-10 rounded-full border-2 border-white/10 border-t-accent animate-spin" />
-          <div className="space-y-1">
-            <div className="text-sm font-semibold tracking-tight text-white/92">SoundCloud Desktop</div>
-            <div className="text-xs text-white/45">{label}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 type AppErrorBoundaryState = {
   error: Error | null;
@@ -84,6 +65,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
 }
 
 function AppInner() {
+  const { t } = useTranslation();
   const { isAuthenticated, sessionId, reloginRequestId, fetchUser, beginRelogin } = useAuthStore(
     useShallow((s) => ({
       isAuthenticated: s.isAuthenticated,
@@ -191,10 +173,7 @@ function AppInner() {
   }, [appMode, authHydrated, beginRelogin, fetchUser, sessionId]);
 
   const showOfflineShell = appMode !== 'online';
-
-  if ((!authHydrated || checking) && !showOfflineShell) {
-    return <AppBootScreen label={sessionId ? 'Restoring your session...' : 'Starting app...'} />;
-  }
+  const isBooting = (!authHydrated || checking) && !showOfflineShell;
 
   return (
     <ThemeProvider>
@@ -212,6 +191,16 @@ function AppInner() {
             },
           }}
         />
+        {isBooting && (
+          <div
+            className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-2.5 px-5 py-2.5 rounded-full border border-white/[0.08] bg-white/[0.06] backdrop-blur-[20px] shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in whitespace-nowrap"
+          >
+            <span className="text-[12px] font-medium text-white/70">
+              {sessionId ? t('auth.restoringSession') : t('auth.startingApp')}
+            </span>
+            <div className="h-4 w-4 rounded-full border-2 border-white/10 border-t-accent animate-spin" />
+          </div>
+        )}
         {appMode === 'online' && isAuthenticated && <UpdateChecker />}
 
         {showOfflineShell ? (
