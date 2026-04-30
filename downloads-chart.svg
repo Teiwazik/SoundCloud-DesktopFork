@@ -43,41 +43,43 @@
   </text>
 
   <text x="780" y="28" text-anchor="end" fill="#ff5500" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600" class="text-anim">
-    2053 total
+    4481 total
   </text>
   <text x="780" y="46" text-anchor="end" fill="#3fb950" font-family="system-ui, -apple-system, sans-serif" font-size="12" class="text-anim">
-    6.3.2 latest
+    7.0.0 latest
   </text>
 
   <g opacity="0.1">
-    <line x1="60" y1="340" x2="760" y2="340" stroke="#c9d1d9" stroke-width="1"/>
-    <line x1="60" y1="281" x2="760" y2="281" stroke="#c9d1d9" stroke-width="1"/>
-    <line x1="60" y1="222" x2="760" y2="222" stroke="#c9d1d9" stroke-width="1"/>
-    <line x1="60" y1="163" x2="760" y2="163" stroke="#c9d1d9" stroke-width="1"/>
-    <line x1="60" y1="104" x2="760" y2="104" stroke="#c9d1d9" stroke-width="1"/>
+    <line x1="60" y1="340.0" x2="760" y2="340.0" stroke="#c9d1d9" stroke-width="1"/>
+    <line x1="60" y1="283.0" x2="760" y2="283.0" stroke="#c9d1d9" stroke-width="1"/>
+    <line x1="60" y1="226.0" x2="760" y2="226.0" stroke="#c9d1d9" stroke-width="1"/>
+    <line x1="60" y1="169.0" x2="760" y2="169.0" stroke="#c9d1d9" stroke-width="1"/>
+    <line x1="60" y1="112.0" x2="760" y2="112.0" stroke="#c9d1d9" stroke-width="1"/>
+    <line x1="60" y1="55.0" x2="760" y2="55.0" stroke="#c9d1d9" stroke-width="1"/>
   </g>
 
   <g fill="#8b949e" font-family="system-ui, -apple-system, sans-serif" font-size="11" class="text-anim">
-    <text x="50" y="344" text-anchor="end">0</text>
-    <text x="50" y="285" text-anchor="end">500</text>
-    <text x="50" y="226" text-anchor="end">1000</text>
-    <text x="50" y="167" text-anchor="end">1500</text>
-    <text x="50" y="108" text-anchor="end">2000</text>
+    <text x="50" y="344.0" text-anchor="end">0</text>
+    <text x="50" y="287.0" text-anchor="end">1000</text>
+    <text x="50" y="230.0" text-anchor="end">2000</text>
+    <text x="50" y="173.0" text-anchor="end">3000</text>
+    <text x="50" y="116.0" text-anchor="end">4000</text>
+    <text x="50" y="59.0" text-anchor="end">5000</text>
   </g>
 
   <g fill="#8b949e" font-family="system-ui, -apple-system, sans-serif" font-size="11" class="text-anim">
-    <text x="60" y="360" text-anchor="middle">Mar 21</text>
-    <text x="134.2" y="360" text-anchor="middle">Mar 24</text>
-    <text x="208.5" y="360" text-anchor="middle">Mar 26</text>
-    <text x="325.2" y="360" text-anchor="middle">Mar 28</text>
-    <text x="494.4" y="360" text-anchor="middle">Mar 31</text>
-    <text x="663.7" y="360" text-anchor="middle">Apr 05</text>
-    <text x="760" y="360" text-anchor="middle">Apr 06</text>
+    <text x="60.0" y="360" text-anchor="middle">Mar 21</text>
+    <text x="176.7" y="360" text-anchor="middle">Mar 28</text>
+    <text x="293.3" y="360" text-anchor="middle">Apr 04</text>
+    <text x="410.0" y="360" text-anchor="middle">Apr 10</text>
+    <text x="526.7" y="360" text-anchor="middle">Apr 17</text>
+    <text x="643.3" y="360" text-anchor="middle">Apr 24</text>
+    <text x="760.0" y="360" text-anchor="middle">Apr 30</text>
   </g>
 
-  <path d="M 60 339.8 L 85 339.7 L 110 339.5 L 134.2 339.4 L 160 339.2 L 185 339 L 208.5 338.7 L 230 337.8 L 255 336.5 L 280 334.8 L 305 332.5 L 325.2 325.8 L 350 275.2 L 375 240.8 L 400 208.4 L 420 190.2 L 440 180.5 L 460 173.8 L 480 168.2 L 494.4 160.5 L 520 155.8 L 545 151.2 L 570 147.5 L 595 144.2 L 620 141.5 L 645 139.2 L 663.7 136.8 L 690 136.2 L 715 136.1 L 740 136.1 L 760 136 L 760 340 Z" fill="url(#areaGradient)" class="area-path"/>
+  <path d="M 60.0 340.0 L 60.0 339.9 L 62.9 339.9 L 75.1 338.7 L 75.9 338.6 L 93.6 338.6 L 96.1 338.6 L 98.0 338.6 L 107.4 338.6 L 108.2 338.5 L 128.6 338.4 L 128.7 338.2 L 129.5 337.7 L 130.0 337.7 L 130.2 337.2 L 142.4 337.0 L 143.6 336.5 L 143.9 334.5 L 180.1 312.2 L 181.2 289.7 L 181.7 255.5 L 182.4 220.8 L 184.2 176.5 L 202.9 175.9 L 230.0 174.3 L 264.1 169.8 L 320.9 165.2 L 337.0 165.2 L 337.2 158.9 L 378.7 143.6 L 467.5 138.5 L 469.3 126.2 L 515.5 84.8 L 759.6 84.6 L 760.0 84.6 L 760 340 L 60 340 Z" fill="url(#areaGradient)" class="area-path"/>
 
-  <path d="M 60 339.8 L 85 339.7 L 110 339.5 L 134.2 339.4 L 160 339.2 L 185 339 L 208.5 338.7 L 230 337.8 L 255 336.5 L 280 334.8 L 305 332.5 L 325.2 325.8 L 350 275.2 L 375 240.8 L 400 208.4 L 420 190.2 L 440 180.5 L 460 173.8 L 480 168.2 L 494.4 160.5 L 520 155.8 L 545 151.2 L 570 147.5 L 595 144.2 L 620 141.5 L 645 139.2 L 663.7 136.8 L 690 136.2 L 715 136.1 L 740 136.1 L 760 136"
+  <path d="M 60.0 340.0 L 60.0 339.9 L 62.9 339.9 L 75.1 338.7 L 75.9 338.6 L 93.6 338.6 L 96.1 338.6 L 98.0 338.6 L 107.4 338.6 L 108.2 338.5 L 128.6 338.4 L 128.7 338.2 L 129.5 337.7 L 130.0 337.7 L 130.2 337.2 L 142.4 337.0 L 143.6 336.5 L 143.9 334.5 L 180.1 312.2 L 181.2 289.7 L 181.7 255.5 L 182.4 220.8 L 184.2 176.5 L 202.9 175.9 L 230.0 174.3 L 264.1 169.8 L 320.9 165.2 L 337.0 165.2 L 337.2 158.9 L 378.7 143.6 L 467.5 138.5 L 469.3 126.2 L 515.5 84.8 L 759.6 84.6 L 760.0 84.6"
     fill="none"
     stroke="#ff5500"
     stroke-width="3"
@@ -86,19 +88,20 @@
     filter="url(#glow)"
     class="line-path"/>
 
-  <circle cx="60" cy="339.8" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
-  <circle cx="134.2" cy="339.4" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
-  <circle cx="208.5" cy="338.7" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
-  <circle cx="325.2" cy="325.8" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
-  <circle cx="494.4" cy="160.5" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
-  <circle cx="663.7" cy="136.8" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
-  <circle cx="760" cy="136" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="180.1" cy="312.2" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="181.2" cy="289.7" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="181.7" cy="255.5" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="182.4" cy="220.8" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="184.2" cy="176.5" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="378.7" cy="143.6" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="469.3" cy="126.2" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
+    <circle cx="515.5" cy="84.8" r="4" fill="#ff5500" stroke="#0d1117" stroke-width="2" class="data-point"/>
 
   <line x1="60" y1="55" x2="60" y2="340" stroke="#30363d" stroke-width="2"/>
   <line x1="60" y1="340" x2="760" y2="340" stroke="#30363d" stroke-width="2"/>
 
   <g fill="#c9d1d9" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="500" class="text-anim">
-    <text x="20" y="370">&#9733; 3 stars</text>
+    <text x="20" y="370">&#9733; 6 stars</text>
     <text x="20" y="388">&#9741; 0 forks</text>
   </g>
 
