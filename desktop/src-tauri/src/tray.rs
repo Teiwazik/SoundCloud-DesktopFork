@@ -14,8 +14,15 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .items(&[&show, &play_pause, &prev, &next, &quit])
         .build()?;
 
-    TrayIconBuilder::new()
-        .icon(app.default_window_icon().cloned().expect("no app icon"))
+    // ID lets `app.tray_by_id("main")` find this tray later — required so
+    // the `set_app_icon` command can swap the tray icon at runtime.
+    //
+    // We use a pre-rendered 64x64 tray PNG instead of the 256x256 window
+    // icon. Windows downscales 256→16 with low-quality interpolation and
+    // the result is muddy; 64→16 looks crisp because the source already
+    // went through high-quality LANCZOS at build time.
+    TrayIconBuilder::with_id("main")
+        .icon(tauri::include_image!("icons/variants/default-tray.png"))
         .tooltip("SoundCloud Desktop")
         .menu(&menu)
         .on_menu_event(|app, event| {

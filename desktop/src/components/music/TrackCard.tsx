@@ -133,12 +133,14 @@ export const TrackCard = React.memo(
           >
             {track.title}
           </p>
-          <p
-            className="text-[11px] text-white/35 truncate mt-0.5 cursor-pointer hover:text-white/55 transition-colors duration-150"
-            onClick={() => navigate(`/user/${encodeURIComponent(track.user.urn)}`)}
-          >
-            {track.user.username}
-          </p>
+          {track.user && (
+            <p
+              className="text-[11px] text-white/35 truncate mt-0.5 cursor-pointer hover:text-white/55 transition-colors duration-150"
+              onClick={() => navigate(`/user/${encodeURIComponent(track.user!.urn)}`)}
+            >
+              {track.user.username}
+            </p>
+          )}
           {track.playback_count != null && (
             <p className="text-[10px] text-white/20 mt-1 tabular-nums">
               {fc(track.playback_count)} plays

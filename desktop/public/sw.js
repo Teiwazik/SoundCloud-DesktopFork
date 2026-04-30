@@ -8,8 +8,11 @@ const WHITELIST = [
     'tauri.localhost',
     'ipc.localhost',
     'scproxy.localhost',
-    'api.soundcloud.su',
-    'proxy.soundcloud.su',
+    'api.scdinternal.site',
+    'proxy.scdinternal.site',
+    'stream.scdinternal.site',
+    'stream-premium.scdinternal.site',
+    'storage.scdinternal.site',
     'unpkg.com',
 ];
 /** @type {string | null} */

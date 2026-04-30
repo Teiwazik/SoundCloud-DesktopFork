@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useSubscription } from '../lib/subscription';
@@ -21,14 +21,23 @@ import {
   clearLyricsCache,
 } from '../lib/cache';
 import { fetchAllLikedTracks } from '../lib/hooks';
-import { Globe, Link, Loader2, Trash2, X, Play, Pause, Square } from '../lib/icons';
+import { Globe, Link, Loader2, Smartphone, Trash2, X, Play, Pause, Square } from '../lib/icons';
 import { useAuthStore } from '../stores/auth';
 import { useCacheTaskStore } from '../stores/cache-task';
 
 import {
-  isDefaultQdrantKeyInUse,
+  APP_FONT_SIZE_DEFAULT,
+  APP_FONT_SIZE_MAX,
+  APP_FONT_SIZE_MIN,
+  APP_UI_SCALE_DEFAULT,
+  APP_UI_SCALE_MAX,
+  APP_UI_SCALE_MIN,
+  APP_ICON_VARIANTS,
+  DEFAULT_FONT_STACK,
   THEME_PRESETS,
   useSettingsStore,
+  type AppFontMode,
+  type AppIconVariant,
   type DiscordRpcButtonMode,
   type DiscordRpcMode,
   type ThemeGradientAnimation,
@@ -120,6 +129,714 @@ const LanguageSection = React.memo(function LanguageSection() {
             {lang.label}
           </button>
         ))}
+      </div>
+    </section>
+  );
+});
+
+/* ── App Icon Section ───────────────────────────────────── */
+
+interface CustomIcon {
+  path: string;
+  thumb: string; // blob: URL
+}
+
+const AppIconSection = React.memo(function AppIconSection() {
+  const { t } = useTranslation();
+  const appIcon = useSettingsStore((s) => s.appIcon);
+  const setAppIcon = useSettingsStore((s) => s.setAppIcon);
+  const customAppIconPath = useSettingsStore((s) => s.customAppIconPath);
+  const setCustomAppIconPath = useSettingsStore((s) => s.setCustomAppIconPath);
+  const [customIcons, setCustomIcons] = useState<CustomIcon[]>([]);
+
+  // Re-apply on appIcon change. For 'custom' we route through the runtime
+  // loader; for built-ins the bundled-image swap is cheap.
+  useEffect(() => {
+    if (appIcon === 'custom' && customAppIconPath) {
+      invoke('set_custom_app_icon', { path: customAppIconPath }).catch(() => {});
+    } else {
+      invoke('set_app_icon', { variant: appIcon }).catch(() => {});
+    }
+  }, [appIcon, customAppIconPath]);
+
+  // Load all saved custom icons from `<appData>/custom-icons/` into memory as
+  // blob URLs. Files are tiny (≤256×256 PNG), so reading them all upfront is
+  // fine — and avoids the asset:// protocol which would need extra config.
+  const reloadCustomIcons = useCallback(async () => {
+    try {
+      const fs = await import('@tauri-apps/plugin-fs');
+      const pathApi = await import('@tauri-apps/api/path');
+      const dir = await pathApi.join(await pathApi.appDataDir(), 'custom-icons');
+      if (!(await fs.exists(dir))) {
+        setCustomIcons([]);
+        return;
+      }
+      const entries = await fs.readDir(dir);
+      const next: CustomIcon[] = [];
+      for (const entry of entries) {
+        if (!entry.isFile || !entry.name) continue;
+        if (!/\.(png|ico)$/i.test(entry.name)) continue;
+        const full = await pathApi.join(dir, entry.name);
+        try {
+          const bytes = await fs.readFile(full);
+          const mime = entry.name.toLowerCase().endsWith('.ico') ? 'image/x-icon' : 'image/png';
+          const blob = new Blob([bytes], { type: mime });
+          next.push({ path: full, thumb: URL.createObjectURL(blob) });
+        } catch {
+          // skip unreadable
+        }
+      }
+      // Sort by path so order is stable across renders (filenames embed a ms
+      // timestamp, so this is also chronological — newest last).
+      next.sort((a, b) => a.path.localeCompare(b.path));
+      setCustomIcons((prev) => {
+        for (const p of prev) URL.revokeObjectURL(p.thumb);
+        return next;
+      });
+    } catch (e) {
+      console.error('[appIcon] reloadCustomIcons failed', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadCustomIcons();
+    return () => {
+      // Revoke any blob URLs still in state when the section unmounts.
+      setCustomIcons((prev) => {
+        for (const p of prev) URL.revokeObjectURL(p.thumb);
+        return [];
+      });
+    };
+  }, [reloadCustomIcons]);
+
+  const onPick = useCallback(
+    (id: AppIconVariant) => {
+      if (id === appIcon) return;
+      setAppIcon(id);
+      invoke('set_app_icon', { variant: id }).catch(() => {});
+    },
+    [appIcon, setAppIcon],
+  );
+
+  const applyCustom = useCallback(
+    async (path: string) => {
+      try {
+        await invoke('set_custom_app_icon', { path });
+        setCustomAppIconPath(path);
+        setAppIcon('custom');
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast.error(`${t('settings.appIconCustomFailed')}: ${msg}`);
+      }
+    },
+    [setAppIcon, setCustomAppIconPath, t],
+  );
+
+  const onChooseCustom = useCallback(async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'PNG / ICO', extensions: ['png', 'ico'] }],
+      });
+      if (!picked || typeof picked !== 'string') return;
+
+      // Copy via Rust — the source path is arbitrary (Downloads, Desktop, …)
+      // and isn't covered by our plugin-fs scope, but Rust uses std::fs.
+      const dest = await invoke<string>('copy_custom_app_icon', { src: picked });
+      await invoke('set_custom_app_icon', { path: dest });
+      setCustomAppIconPath(dest);
+      setAppIcon('custom');
+      await reloadCustomIcons();
+      toast.success(t('settings.appIconCustomApplied'));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`${t('settings.appIconCustomFailed')}: ${msg}`);
+      console.error('[appIcon] custom pick failed', e);
+    }
+  }, [setAppIcon, setCustomAppIconPath, reloadCustomIcons, t]);
+
+  const onDeleteCustom = useCallback(
+    async (path: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const fs = await import('@tauri-apps/plugin-fs');
+        await fs.remove(path);
+        // If the deleted icon is currently active, revert to default.
+        if (customAppIconPath === path) {
+          setCustomAppIconPath(null);
+          setAppIcon('default');
+          invoke('set_app_icon', { variant: 'default' }).catch(() => {});
+        }
+        await reloadCustomIcons();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        toast.error(`${t('settings.appIconCustomFailed')}: ${msg}`);
+      }
+    },
+    [customAppIconPath, setAppIcon, setCustomAppIconPath, reloadCustomIcons, t],
+  );
+
+  return (
+    <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl">
+      <h3 className="text-[15px] font-bold text-white/80 tracking-tight">
+        {t('settings.appIconHeader')}
+      </h3>
+      <p className="text-[12px] text-white/40 mt-1 mb-4">{t('settings.appIconDesc')}</p>
+      <div className="grid grid-cols-5 gap-3">
+        {APP_ICON_VARIANTS.map(({ id, labelKey }) => {
+          const active = appIcon === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onPick(id)}
+              className={`group flex flex-col items-center gap-2 p-3 rounded-2xl transition-all duration-200 cursor-pointer border ${
+                active
+                  ? 'bg-white/[0.08] border-white/[0.18] ring-1 ring-accent/40'
+                  : 'bg-white/[0.02] border-white/[0.05] hover:bg-white/[0.05] hover:border-white/[0.1]'
+              }`}
+              aria-pressed={active}
+            >
+              <div
+                className={`relative w-14 h-14 rounded-xl overflow-hidden bg-black/30 ring-1 transition-all ${
+                  active ? 'ring-accent/30' : 'ring-white/[0.04] group-hover:ring-white/[0.1]'
+                }`}
+              >
+                <img
+                  src={`/app-icons/${id}.png`}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <span
+                className={`text-[11px] font-medium text-center leading-tight transition-colors ${
+                  active ? 'text-white/90' : 'text-white/45 group-hover:text-white/70'
+                }`}
+              >
+                {t(labelKey)}
+              </span>
+            </button>
+          );
+        })}
+
+        {customIcons.map(({ path, thumb }) => {
+          const active = appIcon === 'custom' && customAppIconPath === path;
+          const fileName = path.split(/[\\/]/).pop() || path;
+          return (
+            <div
+              key={path}
+              className={`group relative flex flex-col items-center gap-2 p-3 rounded-2xl transition-all duration-200 cursor-pointer border ${
+                active
+                  ? 'bg-white/[0.08] border-white/[0.18] ring-1 ring-accent/40'
+                  : 'bg-white/[0.02] border-white/[0.05] hover:bg-white/[0.05] hover:border-white/[0.1]'
+              }`}
+              onClick={() => applyCustom(path)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  void applyCustom(path);
+                }
+              }}
+              aria-pressed={active}
+              title={fileName}
+            >
+              <div
+                className={`relative w-14 h-14 rounded-xl overflow-hidden bg-black/30 ring-1 transition-all ${
+                  active ? 'ring-accent/30' : 'ring-white/[0.04] group-hover:ring-white/[0.1]'
+                }`}
+              >
+                <img src={thumb} alt="" className="w-full h-full object-contain" />
+              </div>
+              <span
+                className={`text-[11px] font-medium text-center leading-tight transition-colors truncate max-w-full ${
+                  active ? 'text-white/90' : 'text-white/45 group-hover:text-white/70'
+                }`}
+              >
+                {t('settings.appIconCustom')}
+              </span>
+              <button
+                type="button"
+                onClick={(e) => onDeleteCustom(path, e)}
+                className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/60 text-white/70 hover:bg-red-500/80 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
+                aria-label={t('settings.appIconCustomDelete')}
+                title={t('settings.appIconCustomDelete')}
+              >
+                <X size={12} strokeWidth={2.5} />
+              </button>
+            </div>
+          );
+        })}
+
+        <button
+          type="button"
+          onClick={onChooseCustom}
+          className="group flex flex-col items-center gap-2 p-3 rounded-2xl transition-all duration-200 cursor-pointer border bg-white/[0.02] border-white/[0.05] border-dashed hover:bg-white/[0.05] hover:border-white/[0.1]"
+        >
+          <div className="relative w-14 h-14 rounded-xl overflow-hidden bg-black/30 ring-1 ring-white/[0.04] group-hover:ring-white/[0.1] transition-all flex items-center justify-center">
+            <span className="text-[28px] text-white/40 leading-none font-light">+</span>
+          </div>
+          <span className="text-[11px] font-medium text-center leading-tight text-white/45 group-hover:text-white/70 transition-colors">
+            {t('settings.appIconAdd')}
+          </span>
+        </button>
+      </div>
+      <p className="text-[11px] text-white/30 mt-4">{t('settings.appIconFormatHint')}</p>
+    </section>
+  );
+});
+
+/* ── App Font Section ───────────────────────────────────── */
+
+interface SystemFontEntry {
+  family: string;
+  path: string;
+}
+
+interface CustomFontEntry {
+  path: string;
+  family: string;
+  blobUrl: string;
+}
+
+const FONT_PREVIEW_SAMPLE = 'AaBbCc 0123 — Привет';
+
+const AppFontSection = React.memo(function AppFontSection() {
+  const { t } = useTranslation();
+  const mode = useSettingsStore((s) => s.appFontMode);
+  const systemFamily = useSettingsStore((s) => s.appFontSystemFamily);
+  const customPath = useSettingsStore((s) => s.appFontCustomPath);
+  const customFamily = useSettingsStore((s) => s.appFontCustomFamily);
+  const size = useSettingsStore((s) => s.appFontSize);
+  const uiScale = useSettingsStore((s) => s.appUiScale);
+  const setMode = useSettingsStore((s) => s.setAppFontMode);
+  const setSystemFamily = useSettingsStore((s) => s.setAppFontSystemFamily);
+  const setCustom = useSettingsStore((s) => s.setAppFontCustom);
+  const setSize = useSettingsStore((s) => s.setAppFontSize);
+  const setUiScale = useSettingsStore((s) => s.setAppUiScale);
+
+  const [systemFonts, setSystemFonts] = useState<SystemFontEntry[]>([]);
+  const [systemLoading, setSystemLoading] = useState(false);
+  const [customFonts, setCustomFonts] = useState<CustomFontEntry[]>([]);
+  const [systemQuery, setSystemQuery] = useState('');
+  const [systemOpen, setSystemOpen] = useState(false);
+
+  // Lazy-fetch system fonts the first time the user opens the dropdown —
+  // scanning every TTF on the OS can take 1–2s on machines with thousands.
+  const ensureSystemFonts = useCallback(async () => {
+    if (systemFonts.length > 0 || systemLoading) return;
+    setSystemLoading(true);
+    try {
+      const list = await invoke<SystemFontEntry[]>('list_system_fonts');
+      setSystemFonts(list);
+    } catch (e) {
+      console.error('[appFont] list_system_fonts failed', e);
+    } finally {
+      setSystemLoading(false);
+    }
+  }, [systemFonts.length, systemLoading]);
+
+  // Load saved custom fonts (in `<appData>/fonts/`) and register an
+  // @font-face for each so the preview text in the picker tile actually
+  // renders in that font.
+  const reloadCustomFonts = useCallback(async () => {
+    try {
+      const fs = await import('@tauri-apps/plugin-fs');
+      const pathApi = await import('@tauri-apps/api/path');
+      const dir = await pathApi.join(await pathApi.appDataDir(), 'fonts');
+      if (!(await fs.exists(dir))) {
+        setCustomFonts([]);
+        return;
+      }
+      const entries = await fs.readDir(dir);
+      const next: CustomFontEntry[] = [];
+      const styleId = 'app-font-picker-faces';
+      let styleTag = document.getElementById(styleId) as HTMLStyleElement | null;
+      if (!styleTag) {
+        styleTag = document.createElement('style');
+        styleTag.id = styleId;
+        document.head.appendChild(styleTag);
+      }
+      const faceRules: string[] = [];
+
+      for (const entry of entries) {
+        if (!entry.isFile || !entry.name) continue;
+        if (!/\.(ttf|otf|woff2?|woff)$/i.test(entry.name)) continue;
+        const full = await pathApi.join(dir, entry.name);
+        try {
+          const family = await invoke<string>('read_font_family', { path: full });
+          const bytes = await fs.readFile(full);
+          const ext = entry.name.split('.').pop()?.toLowerCase() || 'ttf';
+          const mime =
+            ext === 'otf'
+              ? 'font/otf'
+              : ext === 'woff'
+                ? 'font/woff'
+                : ext === 'woff2'
+                  ? 'font/woff2'
+                  : 'font/ttf';
+          const blob = new Blob([bytes], { type: mime });
+          const blobUrl = URL.createObjectURL(blob);
+          const fmt =
+            ext === 'otf'
+              ? 'opentype'
+              : ext === 'woff'
+                ? 'woff'
+                : ext === 'woff2'
+                  ? 'woff2'
+                  : 'truetype';
+          const safeFamily = family.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+          faceRules.push(
+            `@font-face { font-family: "${safeFamily}"; src: url("${blobUrl}") format("${fmt}"); font-display: swap; }`,
+          );
+          next.push({ path: full, family, blobUrl });
+        } catch (e) {
+          console.warn('[appFont] could not load custom font', full, e);
+        }
+      }
+
+      next.sort((a, b) => a.family.localeCompare(b.family));
+      styleTag.textContent = faceRules.join('\n');
+
+      setCustomFonts((prev) => {
+        for (const p of prev) URL.revokeObjectURL(p.blobUrl);
+        return next;
+      });
+    } catch (e) {
+      console.error('[appFont] reloadCustomFonts failed', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadCustomFonts();
+    return () => {
+      setCustomFonts((prev) => {
+        for (const p of prev) URL.revokeObjectURL(p.blobUrl);
+        return [];
+      });
+    };
+  }, [reloadCustomFonts]);
+
+  const filteredSystem = useMemo(() => {
+    const q = systemQuery.trim().toLowerCase();
+    if (!q) return systemFonts;
+    return systemFonts.filter((f) => f.family.toLowerCase().includes(q));
+  }, [systemFonts, systemQuery]);
+
+  const onPickDefault = () => {
+    setMode('default');
+  };
+
+  const onPickSystem = (family: string) => {
+    setSystemFamily(family);
+    setMode('system');
+    setSystemOpen(false);
+  };
+
+  const onPickCustom = (entry: CustomFontEntry) => {
+    setCustom(entry.path, entry.family);
+    setMode('custom');
+  };
+
+  const onAddCustom = useCallback(async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'Font', extensions: ['ttf', 'otf', 'woff', 'woff2'] }],
+      });
+      if (!picked || typeof picked !== 'string') return;
+      const dest = await invoke<string>('copy_custom_font', { src: picked });
+      const family = await invoke<string>('read_font_family', { path: dest });
+      await reloadCustomFonts();
+      setCustom(dest, family);
+      setMode('custom');
+      toast.success(t('settings.appFontCustomApplied'));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`${t('settings.appFontCustomFailed')}: ${msg}`);
+    }
+  }, [reloadCustomFonts, setCustom, setMode, t]);
+
+  const onDeleteCustom = useCallback(
+    async (path: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const fs = await import('@tauri-apps/plugin-fs');
+        await fs.remove(path);
+        if (customPath === path) {
+          setCustom(null, null);
+          setMode('default');
+        }
+        await reloadCustomFonts();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        toast.error(`${t('settings.appFontCustomFailed')}: ${msg}`);
+      }
+    },
+    [customPath, setCustom, setMode, reloadCustomFonts, t],
+  );
+
+  const onResetSize = () => setSize(APP_FONT_SIZE_DEFAULT);
+  const onResetUiScale = () => setUiScale(APP_UI_SCALE_DEFAULT);
+
+  const ModeButton = ({ id, label }: { id: AppFontMode; label: string }) => {
+    const active = mode === id;
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          if (id === 'default') onPickDefault();
+          else if (id === 'system') {
+            setMode('system');
+            void ensureSystemFonts();
+            setSystemOpen(true);
+          } else {
+            setMode('custom');
+          }
+        }}
+        className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border cursor-pointer ${
+          active
+            ? 'bg-white/[0.08] border-white/[0.2] text-white/90'
+            : 'bg-white/[0.02] border-white/[0.05] text-white/50 hover:bg-white/[0.05]'
+        }`}
+        aria-pressed={active}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  return (
+    <section
+      className="relative bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl"
+    >
+      <h3 className="text-[15px] font-bold text-white/80 tracking-tight">
+        {t('settings.appFontHeader')}
+      </h3>
+      <p className="text-[12px] text-white/40 mt-1 mb-4">{t('settings.appFontDesc')}</p>
+
+      <div className="flex items-center gap-2 mb-4">
+        <ModeButton id="default" label={t('settings.appFontModeDefault')} />
+        <ModeButton id="system" label={t('settings.appFontModeSystem')} />
+        <ModeButton id="custom" label={t('settings.appFontModeCustom')} />
+      </div>
+
+      {mode === 'default' && (
+        <div className="rounded-2xl border border-white/[0.06] bg-black/20 p-4">
+          <p
+            className="text-[18px] text-white/85 truncate"
+            style={{ fontFamily: DEFAULT_FONT_STACK }}
+          >
+            {FONT_PREVIEW_SAMPLE}
+          </p>
+          <p className="text-[11px] text-white/30 mt-2">{t('settings.appFontDefaultHint')}</p>
+        </div>
+      )}
+
+      {mode === 'system' && (
+        <div className="space-y-2">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setSystemOpen((v) => !v);
+                if (!systemOpen) void ensureSystemFonts();
+              }}
+              className="w-full flex items-center justify-between gap-3 rounded-2xl border border-white/[0.06] bg-black/20 px-4 py-3 hover:bg-black/30 transition-colors cursor-pointer"
+            >
+              <span
+                className="text-[15px] text-white/85 truncate"
+                style={{ fontFamily: systemFamily ? `"${systemFamily}", ${DEFAULT_FONT_STACK}` : DEFAULT_FONT_STACK }}
+              >
+                {systemFamily || t('settings.appFontSystemPlaceholder')}
+              </span>
+              <span className="text-white/40 text-[12px] shrink-0">
+                {systemOpen ? '▲' : '▼'}
+              </span>
+            </button>
+
+            {systemOpen && (
+              <div className="mt-2 rounded-2xl border border-white/[0.08] bg-black/40 overflow-hidden">
+                <input
+                  type="text"
+                  value={systemQuery}
+                  onChange={(e) => setSystemQuery(e.target.value)}
+                  placeholder={t('settings.appFontSystemSearch')}
+                  className="w-full px-4 py-2.5 bg-transparent border-b border-white/[0.06] text-[13px] text-white/80 placeholder-white/30 focus:outline-none"
+                  autoFocus
+                />
+                <div className="max-h-72 overflow-y-auto">
+                  {systemLoading && (
+                    <div className="px-4 py-3 text-[12px] text-white/40">
+                      <Loader2 size={14} className="inline mr-2 animate-spin" />
+                      {t('settings.appFontSystemLoading')}
+                    </div>
+                  )}
+                  {!systemLoading && filteredSystem.length === 0 && (
+                    <div className="px-4 py-3 text-[12px] text-white/40">
+                      {t('settings.appFontSystemEmpty')}
+                    </div>
+                  )}
+                  {!systemLoading &&
+                    filteredSystem.slice(0, 200).map((f) => {
+                      const active = systemFamily === f.family;
+                      return (
+                        <button
+                          key={f.path}
+                          type="button"
+                          onClick={() => onPickSystem(f.family)}
+                          className={`w-full text-left px-4 py-2 text-[15px] transition-colors cursor-pointer ${
+                            active
+                              ? 'bg-white/[0.06] text-white/95'
+                              : 'text-white/75 hover:bg-white/[0.04]'
+                          }`}
+                          style={{ fontFamily: `"${f.family}", ${DEFAULT_FONT_STACK}` }}
+                        >
+                          {f.family}
+                        </button>
+                      );
+                    })}
+                  {!systemLoading && filteredSystem.length > 200 && (
+                    <div className="px-4 py-2 text-[11px] text-white/30 border-t border-white/[0.04]">
+                      {t('settings.appFontSystemMore', { count: filteredSystem.length - 200 })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {mode === 'custom' && (
+        <div className="grid grid-cols-2 gap-3">
+          {customFonts.map((entry) => {
+            const active = customPath === entry.path;
+            return (
+              <div
+                key={entry.path}
+                className={`group relative flex flex-col gap-2 p-4 rounded-2xl border cursor-pointer transition-all ${
+                  active
+                    ? 'bg-white/[0.08] border-white/[0.18] ring-1 ring-accent/40'
+                    : 'bg-white/[0.02] border-white/[0.05] hover:bg-white/[0.05]'
+                }`}
+                onClick={() => onPickCustom(entry)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onPickCustom(entry);
+                  }
+                }}
+                aria-pressed={active}
+              >
+                <p
+                  className="text-[18px] text-white/90 truncate"
+                  style={{ fontFamily: `"${entry.family}", ${DEFAULT_FONT_STACK}` }}
+                >
+                  {entry.family}
+                </p>
+                <p
+                  className="text-[12px] text-white/45 truncate"
+                  style={{ fontFamily: `"${entry.family}", ${DEFAULT_FONT_STACK}` }}
+                >
+                  {FONT_PREVIEW_SAMPLE}
+                </p>
+                <button
+                  type="button"
+                  onClick={(e) => onDeleteCustom(entry.path, e)}
+                  className="absolute top-2 right-2 w-6 h-6 rounded-full bg-black/60 text-white/70 hover:bg-red-500/80 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
+                  aria-label={t('settings.appFontCustomDelete')}
+                  title={t('settings.appFontCustomDelete')}
+                >
+                  <X size={12} strokeWidth={2.5} />
+                </button>
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            onClick={onAddCustom}
+            className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border border-dashed border-white/[0.1] bg-white/[0.02] hover:bg-white/[0.05] transition-colors cursor-pointer min-h-[80px]"
+          >
+            <span className="text-[24px] text-white/40 leading-none font-light">+</span>
+            <span className="text-[12px] text-white/50">{t('settings.appFontCustomAdd')}</span>
+          </button>
+          <p className="col-span-2 text-[11px] text-white/30 mt-1">
+            {t('settings.appFontCustomHint')}
+          </p>
+        </div>
+      )}
+
+      <div className="mt-6">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[12px] text-white/55 font-medium">
+            {t('settings.appFontSize')}
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-white/80 font-semibold tabular-nums">{size}px</span>
+            {size !== APP_FONT_SIZE_DEFAULT && (
+              <button
+                type="button"
+                onClick={onResetSize}
+                className="text-[11px] text-white/40 hover:text-white/70 transition-colors cursor-pointer"
+              >
+                {t('settings.appFontSizeReset')}
+              </button>
+            )}
+          </div>
+        </div>
+        <input
+          type="range"
+          min={APP_FONT_SIZE_MIN}
+          max={APP_FONT_SIZE_MAX}
+          step={1}
+          value={size}
+          onChange={(e) => setSize(Number(e.target.value))}
+          className="w-full accent-accent cursor-pointer"
+        />
+      </div>
+
+      <div className="mt-5">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[12px] text-white/55 font-medium">
+            {t('settings.appUiScale')}
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-white/80 font-semibold tabular-nums">
+              {Math.round(uiScale * 100)}%
+            </span>
+            {uiScale !== APP_UI_SCALE_DEFAULT && (
+              <button
+                type="button"
+                onClick={onResetUiScale}
+                className="text-[11px] text-white/40 hover:text-white/70 transition-colors cursor-pointer"
+              >
+                {t('settings.appFontSizeReset')}
+              </button>
+            )}
+          </div>
+        </div>
+        <input
+          type="range"
+          min={Math.round(APP_UI_SCALE_MIN * 100)}
+          max={Math.round(APP_UI_SCALE_MAX * 100)}
+          step={5}
+          value={Math.round(uiScale * 100)}
+          onChange={(e) => setUiScale(Number(e.target.value) / 100)}
+          className="w-full accent-accent cursor-pointer"
+        />
+        <p className="text-[11px] text-white/30 mt-1.5">
+          {t('settings.appUiScaleHint')}
+        </p>
       </div>
     </section>
   );
@@ -1197,262 +1914,6 @@ const AudioDeviceSection = React.memo(function AudioDeviceSection() {
   );
 });
 
-/* ── SoundWave Section ────────────────────────────────── */
-
-const SoundWaveSection = React.memo(function SoundWaveSection() {
-  const { t } = useTranslation();
-  const qdrantEnabled = useSettingsStore((s) => s.qdrantEnabled);
-  const qdrantUrl = useSettingsStore((s) => s.qdrantUrl);
-  const qdrantKey = useSettingsStore((s) => s.qdrantKey);
-  const qdrantCollection = useSettingsStore((s) => s.qdrantCollection);
-  const regionalTrendSeed = useSettingsStore((s) => s.regionalTrendSeed);
-  const regionalTrendRegions = useSettingsStore((s) => s.regionalTrendRegions);
-  const llmRerankEnabled = useSettingsStore((s) => s.llmRerankEnabled);
-  const llmEndpoint = useSettingsStore((s) => s.llmEndpoint);
-  const llmModel = useSettingsStore((s) => s.llmModel);
-
-  const setQdrantEnabled = useSettingsStore((s) => s.setQdrantEnabled);
-  const setQdrantUrl = useSettingsStore((s) => s.setQdrantUrl);
-  const setQdrantKey = useSettingsStore((s) => s.setQdrantKey);
-  const setQdrantCollection = useSettingsStore((s) => s.setQdrantCollection);
-  const setRegionalTrendSeed = useSettingsStore((s) => s.setRegionalTrendSeed);
-  const setRegionalTrendRegions = useSettingsStore((s) => s.setRegionalTrendRegions);
-  const setLlmRerankEnabled = useSettingsStore((s) => s.setLlmRerankEnabled);
-  const setLlmEndpoint = useSettingsStore((s) => s.setLlmEndpoint);
-  const setLlmModel = useSettingsStore((s) => s.setLlmModel);
-
-  const [open, setOpen] = useState(false);
-
-  return (
-    <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl shadow-xl overflow-hidden mt-6">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-6 py-5 hover:bg-white/[0.02] transition-colors cursor-pointer"
-      >
-        <div className="flex items-center gap-3">
-          <h3 className="text-[15px] font-bold text-white/80 tracking-tight">SoundWave (Pro)</h3>
-          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent/20 text-accent uppercase tracking-widest">
-            Qdrant
-          </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span
-            className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${qdrantEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/[0.05] text-white/30'}`}
-          >
-            {qdrantEnabled ? t('eq.on', 'On') : t('eq.off', 'Off')}
-          </span>
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-            className={`text-white/30 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
-          >
-            <path
-              d="M3 5l4 4 4-4"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
-      </button>
-
-      {open && (
-        <div className="px-6 pb-6 space-y-5 border-t border-white/[0.05] pt-4 animate-fade-in-up">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <p className="text-[13px] text-white/70 font-medium">
-                {t('settings.qdrantEnabled', 'Enable Recommendation Engine')}
-              </p>
-              <p className="text-[11px] text-white/30">
-                {t(
-                  'settings.qdrantEnabledDesc',
-                  'Use Qdrant for 96D vector search, spectral analysis and mood adaptation',
-                )}
-              </p>
-            </div>
-            <button
-              onClick={() => setQdrantEnabled(!qdrantEnabled)}
-              className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
-                qdrantEnabled ? 'bg-accent' : 'bg-white/10'
-              }`}
-            >
-              <div
-                className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
-                  qdrantEnabled ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
-                }`}
-              />
-            </button>
-          </div>
-
-          <div
-            className={`space-y-4 transition-opacity duration-300 ${!qdrantEnabled ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}
-          >
-            <div className="space-y-1.5">
-              <label className="text-[12px] text-white/40 font-medium ml-1">
-                {t('settings.qdrantUrlLabel', 'Qdrant URL')}
-              </label>
-              <input
-                type="text"
-                value={qdrantUrl}
-                onChange={(e) => setQdrantUrl(e.target.value)}
-                placeholder={t(
-                  'settings.qdrantUrlPlaceholder',
-                  'http://localhost:6333 or https://xxx.cloud.qdrant.io:6333',
-                )}
-                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[12px] text-white/40 font-medium ml-1">
-                {t('settings.qdrantKeyLabel', 'API Key')}
-              </label>
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={qdrantKey}
-                onChange={(e) => setQdrantKey(e.target.value)}
-                placeholder={t(
-                  'settings.qdrantKeyPlaceholderDefault',
-                  'Default key is currently in use. Enter your own to override.',
-                )}
-                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
-              />
-              {isDefaultQdrantKeyInUse(qdrantKey) && (
-                <p className="text-[11px] text-white/30 ml-1">
-                  {t(
-                    'settings.qdrantKeyDefaultHint',
-                    'Field is empty: built-in default key is active right now.',
-                  )}
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[12px] text-white/40 font-medium ml-1">
-                {t('settings.qdrantCollectionLabel', 'Collection Name')}
-              </label>
-              <input
-                type="text"
-                value={qdrantCollection}
-                onChange={(e) => setQdrantCollection(e.target.value)}
-                placeholder={t('settings.qdrantCollectionPlaceholder', 'sw_v2')}
-                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
-              />
-            </div>
-
-            <div className="border-t border-white/[0.05] pt-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <p className="text-[13px] text-white/70 font-medium">
-                    {t('settings.regionalTrendSeed', 'Cross-platform regional trend seeding')}
-                  </p>
-                  <p className="text-[11px] text-white/30">
-                    {t(
-                      'settings.regionalTrendSeedDesc',
-                      'Parse Apple/Deezer charts by regions and blend into discovery pool',
-                    )}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setRegionalTrendSeed(!regionalTrendSeed)}
-                  className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
-                    regionalTrendSeed ? 'bg-accent' : 'bg-white/10'
-                  }`}
-                >
-                  <div
-                    className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
-                      regionalTrendSeed ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[12px] text-white/40 font-medium ml-1">
-                  {t('settings.regionalTrendRegions', 'Regions (ISO2, comma separated)')}
-                </label>
-                <input
-                  type="text"
-                  value={regionalTrendRegions}
-                  onChange={(e) => setRegionalTrendRegions(e.target.value)}
-                  placeholder="us,gb,de,fr,br,jp,kr,mx"
-                  className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="border-t border-white/[0.05] pt-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <p className="text-[13px] text-white/70 font-medium">
-                    {t('settings.llmRerankEnabled', 'Enable LLM reranking')}
-                  </p>
-                  <p className="text-[11px] text-white/30">
-                    {t(
-                      'settings.llmRerankEnabledDesc',
-                      'Rerank recommendation candidates with a local LLM for better mood fit and diversity',
-                    )}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setLlmRerankEnabled(!llmRerankEnabled)}
-                  className={`w-11 h-6 rounded-full transition-all duration-200 cursor-pointer relative ${
-                    llmRerankEnabled ? 'bg-accent' : 'bg-white/10'
-                  }`}
-                >
-                  <div
-                    className={`absolute top-0.5 w-5 h-5 rounded-full shadow-md transition-all duration-200 ${
-                      llmRerankEnabled ? 'left-[22px] bg-accent-contrast' : 'left-0.5 bg-white'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <div
-                className={`space-y-4 transition-opacity duration-300 ${!llmRerankEnabled ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}
-              >
-                <div className="space-y-1.5">
-                  <label className="text-[12px] text-white/40 font-medium ml-1">LLM Endpoint</label>
-                  <input
-                    type="text"
-                    value={llmEndpoint}
-                    onChange={(e) => setLlmEndpoint(e.target.value)}
-                    placeholder="http://127.0.0.1:11434"
-                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-[12px] text-white/40 font-medium ml-1">LLM Model</label>
-                  <input
-                    type="text"
-                    value={llmModel}
-                    onChange={(e) => setLlmModel(e.target.value)}
-                    placeholder="qwen2.5:14b"
-                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[13px] text-white/80 placeholder:text-white/15 focus:border-accent/40 focus:bg-white/[0.06] transition-all outline-none"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-white/20 italic leading-relaxed">
-              {t(
-                'settings.qdrantNote',
-                'Note: You can use either Qdrant Cloud or a local Qdrant server. Tracks are vectorized locally, enriched with spectral features, and synced to the selected collection.',
-              )}
-            </p>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-});
-
 /* ── Playback Section ─────────────────────────────────── */
 
 const PlaybackSection = React.memo(function PlaybackSection() {
@@ -1943,23 +2404,46 @@ const YMImportDialogLazy = React.lazy(() => import('../components/music/YMImport
 const SpotifyImportDialogLazy = React.lazy(() => import('../components/music/SpotifyImportDialog'));
 const YTMusicImportDialogLazy = React.lazy(() => import('../components/music/YTMusicImportDialog'));
 
+const QrLinkSheetLazy = React.lazy(() =>
+  import('../components/auth/QrLinkSheet').then((m) => ({ default: m.QrLinkSheet })),
+);
+
 /* ── Account Section ────────────────────────────────────── */
 
 const AccountSection = React.memo(function AccountSection() {
   const { t } = useTranslation();
   const logout = useAuthStore((s) => s.logout);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const [transferOpen, setTransferOpen] = useState(false);
 
   return (
     <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl">
       <h3 className="text-[15px] font-bold text-white/80 tracking-tight mb-5">
         {t('settings.account')}
       </h3>
-      <button
-        onClick={logout}
-        className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/10 hover:border-red-500/20 transition-all duration-300 cursor-pointer"
-      >
-        {t('auth.signOut')}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        {isAuthenticated && (
+          <button
+            type="button"
+            onClick={() => setTransferOpen(true)}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white/90 border border-white/[0.06] transition-all duration-300 cursor-pointer"
+          >
+            <Smartphone size={14} />
+            {t('qrLink.transferSession')}
+          </button>
+        )}
+        <button
+          onClick={logout}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/10 hover:border-red-500/20 transition-all duration-300 cursor-pointer"
+        >
+          {t('auth.signOut')}
+        </button>
+      </div>
+      {transferOpen && (
+        <React.Suspense fallback={null}>
+          <QrLinkSheetLazy open={transferOpen} onOpenChange={setTransferOpen} mode="push" />
+        </React.Suspense>
+      )}
     </section>
   );
 });
@@ -2467,10 +2951,11 @@ export function Settings() {
     <div className="p-6 pb-32 max-w-2xl mx-auto space-y-6">
       <h1 className="text-3xl font-extrabold text-white tracking-tight">{t('settings.title')}</h1>
       <LanguageSection />
+      <AppIconSection />
+      <AppFontSection />
       <CacheSection />
       <ThemeSection />
       <VisualizerSection />
-      <SoundWaveSection />
       <PlaybackSection />
       <EqualizerSection />
       <AudioDeviceSection />

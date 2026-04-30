@@ -2,20 +2,23 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { isTauri } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { QrLinkSheet } from '../components/auth/QrLinkSheet';
 import { api } from '../lib/api';
 import { DEFAULT_API_BASE, LOCAL_API_BASE, getApiBase } from '../lib/constants';
-import { Check, ClipboardCopy, Disc3 } from '../lib/icons';
+import { Check, ClipboardCopy, Disc3, Smartphone } from '../lib/icons';
 import { queryClient } from '../main';
 import { useAuthStore } from '../stores/auth';
 import { useSettingsStore } from '../stores/settings';
 
 interface LoginResponse {
   url: string;
-  sessionId: string;
+  loginRequestId: string;
 }
 
-interface SessionResponse {
-  authenticated: boolean;
+interface LoginStatusResponse {
+  status: 'pending' | 'completed' | 'failed' | 'expired';
+  sessionId?: string;
+  error?: string;
 }
 
 interface LoginProps {
@@ -36,6 +39,14 @@ export function Login({ autoStartRequestId = null }: LoginProps) {
   const [loading, setLoading] = useState(false);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
+
+  const onQrLoginSuccess = async (sessionId: string) => {
+    setSession(sessionId);
+    await fetchUser();
+    queryClient.invalidateQueries();
+    setQrOpen(false);
+  };
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handledAutoStartRef = useRef<number | null>(null);
   const hasCredentials = soundcloudClientId.trim() && soundcloudClientSecret.trim();
@@ -56,7 +67,7 @@ export function Login({ autoStartRequestId = null }: LoginProps) {
         });
       }
 
-      const { url, sessionId } = await api<LoginResponse>('/auth/login');
+      const { url, loginRequestId } = await api<LoginResponse>('/auth/login');
       setAuthUrl(url);
       if (isTauri()) {
         try {
@@ -70,15 +81,22 @@ export function Login({ autoStartRequestId = null }: LoginProps) {
 
       const pollSession = async () => {
         try {
-          const data = await api<SessionResponse>('/auth/session', {
-            headers: { 'x-session-id': sessionId },
-          });
-          if (data.authenticated) {
+          const data = await api<LoginStatusResponse>(
+            `/auth/login/status?id=${encodeURIComponent(loginRequestId)}`,
+          );
+          if (data.status === 'completed' && data.sessionId) {
             if (pollRef.current) clearTimeout(pollRef.current);
             pollRef.current = null;
-            setSession(sessionId);
+            setSession(data.sessionId);
             await fetchUser();
             queryClient.invalidateQueries();
+            return;
+          }
+          if (data.status === 'failed' || data.status === 'expired') {
+            if (pollRef.current) clearTimeout(pollRef.current);
+            pollRef.current = null;
+            console.error('Login failed:', data.error ?? data.status);
+            setLoading(false);
             return;
           }
         } catch {}
@@ -226,15 +244,27 @@ export function Login({ autoStartRequestId = null }: LoginProps) {
             )}
           </div>
         ) : (
-          <button
-            type="submit"
-            disabled={!canUseCustomApi}
-            className="w-full py-3.5 rounded-2xl bg-accent text-accent-contrast font-semibold text-sm hover:bg-accent-hover active:scale-[0.97] transition-all duration-200 ease-[var(--ease-apple)] cursor-pointer shadow-[0_0_40px_var(--color-accent-glow),0_4px_12px_rgba(0,0,0,0.3)] hover:shadow-[0_0_60px_var(--color-accent-glow),0_4px_16px_rgba(0,0,0,0.4)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-accent disabled:active:scale-100 disabled:hover:shadow-[0_0_40px_var(--color-accent-glow),0_4px_12px_rgba(0,0,0,0.3)]"
-          >
-            {t('auth.signIn')}
-          </button>
+          <div className="w-full flex flex-col gap-2">
+            <button
+              type="submit"
+              disabled={!canUseCustomApi}
+              className="w-full py-3.5 rounded-2xl bg-accent text-accent-contrast font-semibold text-sm hover:bg-accent-hover active:scale-[0.97] transition-all duration-200 ease-[var(--ease-apple)] cursor-pointer shadow-[0_0_40px_var(--color-accent-glow),0_4px_12px_rgba(0,0,0,0.3)] hover:shadow-[0_0_60px_var(--color-accent-glow),0_4px_16px_rgba(0,0,0,0.4)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-accent disabled:active:scale-100 disabled:hover:shadow-[0_0_40px_var(--color-accent-glow),0_4px_12px_rgba(0,0,0,0.3)]"
+            >
+              {t('auth.signIn')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setQrOpen(true)}
+              className="flex items-center justify-center gap-1.5 w-full py-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-[12px] text-white/55 hover:text-white/85 transition-all cursor-pointer"
+            >
+              <Smartphone size={13} />
+              {t('qrLink.scanQr')}
+            </button>
+          </div>
         )}
       </form>
+
+      <QrLinkSheet open={qrOpen} onOpenChange={setQrOpen} mode="pull" onSuccess={onQrLoginSuccess} />
     </div>
   );
 }

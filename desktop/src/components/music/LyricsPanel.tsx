@@ -898,7 +898,11 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
   }, [artwork500, artworkOriginal, track.urn]);
 
   const fullscreenArtSrc = fullscreenArtSources[fullscreenArtIndex] ?? null;
-  const columnMaxWidthClass = `w-full ${maxArt ?? 'max-w-[360px]'}`;
+  // Artwork can grow large with viewport height (driven by maxArt prop).
+  // Title/slider/controls/volume-panel keep a tighter readable width — wide
+  // sliders and centered text on a 640px column look unbalanced.
+  const artMaxWidthClass = `w-full ${maxArt ?? 'max-w-[360px]'}`;
+  const columnMaxWidthClass = `w-full max-w-[420px]`;
   const columnWidthTransitionStyle = {
     transition: 'max-width 500ms cubic-bezier(0.22, 1, 0.36, 1)',
   } satisfies React.CSSProperties;
@@ -953,9 +957,9 @@ const TrackColumn = React.memo(({ track, maxArt }: { track: Track; maxArt?: stri
       : null;
 
   return (
-    <div className="relative z-10 flex h-full min-h-0 w-full flex-col items-center justify-center gap-5 px-12">
+    <div className="relative z-10 flex h-full min-h-0 w-full flex-col items-center justify-center gap-[clamp(10px,1.6vh,28px)] overflow-y-auto px-12 py-6">
       <div
-        className={`${columnMaxWidthClass} aspect-square rounded-2xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-white/[0.08] relative group/art`}
+        className={`${artMaxWidthClass} aspect-square rounded-2xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-white/[0.08] relative group/art`}
         style={columnWidthTransitionStyle}
       >
         {artwork500 ? (
@@ -3347,7 +3351,19 @@ const FullscreenPanels = React.memo(() => {
                 willChange: 'transform',
               }}
             >
-              <TrackColumn track={track} maxArt={isLyrics ? 'max-w-[340px]' : 'max-w-[420px]'} />
+              {/* artwork mode: column width scales with viewport height — */}
+              {/* clamps between 280px (very short windows) and 640px (4K). */}
+              {/* Reserves ~460px for title + slider + controls + panel + */}
+              {/* gaps + fullscreen header. If still not enough, the column */}
+              {/* is scrollable (overflow-y-auto on the parent). */}
+              <TrackColumn
+                track={track}
+                maxArt={
+                  isLyrics
+                    ? 'max-w-[340px]'
+                    : 'max-w-[min(640px,max(280px,calc(100vh-460px)))]'
+                }
+              />
             </div>
           </div>
         </div>

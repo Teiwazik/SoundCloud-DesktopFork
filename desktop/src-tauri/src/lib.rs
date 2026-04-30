@@ -17,6 +17,262 @@ use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use discord::DiscordState;
 use server::ServerState;
 
+/// Switch the main window icon AND the tray icon to one of the bundled
+/// variants. PNGs are baked into the binary at compile time via
+/// `include_image!`, so no filesystem I/O happens at runtime — instant
+/// switch. Works cross-platform: Tauri's `Window::set_icon` and
+/// `TrayIcon::set_icon` abstract over Win/Linux/macOS, and bundled bytes
+/// survive sandboxing (Flatpak/AppImage/MSIX) since nothing is read from
+/// disk at runtime.
+///
+/// Per-platform notes:
+/// - Windows: titlebar + taskbar + tray, all swap immediately.
+/// - Linux X11/Wayland: window icon via _NET_WM_ICON, tray via
+///   StatusNotifier/XEmbed (provided by xdg-desktop-portal in Flatpak).
+/// - macOS: window-level icon is a no-op (Cocoa uses the .icns bundle),
+///   but the menu-bar tray icon still updates.
+#[tauri::command]
+fn set_app_icon(app: tauri::AppHandle, variant: String) -> Result<(), String> {
+    // Window icon: large source so Windows can scale it for titlebar (16),
+    // alt-tab (32) and taskbar (32-48) with its own downscaler.
+    let win_img = match variant.as_str() {
+        "inverted" => tauri::include_image!("icons/variants/inverted.png"),
+        "upstream" => tauri::include_image!("icons/variants/upstream.png"),
+        "wave" => tauri::include_image!("icons/variants/wave.png"),
+        _ => tauri::include_image!("icons/variants/default.png"),
+    };
+    // Tray icon: pre-rendered 64x64 with high-quality LANCZOS downscaling.
+    // Windows tray rendering at 16/20/24/32 (DPI-dependent) with a 256x256
+    // source produced a muddy, pixelated icon — going through a 64x64
+    // intermediate gives much sharper results because Windows' built-in
+    // downscaler is closer to nearest-neighbor than to bicubic.
+    let tray_img = match variant.as_str() {
+        "inverted" => tauri::include_image!("icons/variants/inverted-tray.png"),
+        "upstream" => tauri::include_image!("icons/variants/upstream-tray.png"),
+        "wave" => tauri::include_image!("icons/variants/wave-tray.png"),
+        _ => tauri::include_image!("icons/variants/default-tray.png"),
+    };
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_icon(win_img).map_err(|e| e.to_string())?;
+    }
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_icon(Some(tray_img)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Apply a user-supplied PNG/ICO from disk as the window + tray icon.
+/// Loaded at runtime via `Image::from_path`, so the file must remain on
+/// disk for the lifetime of the app (we don't copy it here — the frontend
+/// calls `copy_custom_app_icon` first and then passes the in-app-data path).
+#[tauri::command]
+fn set_custom_app_icon(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let img = tauri::image::Image::from_path(&path).map_err(|e| e.to_string())?;
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_icon(img.clone()).map_err(|e| e.to_string())?;
+    }
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_icon(Some(img)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Copy the user-picked image into `<app_data>/custom-icons/user-<ts>.<ext>`
+/// and return the new path. We do this in Rust so the frontend doesn't need
+/// plugin-fs permissions for arbitrary source locations (the dialog can
+/// return any path on disk; capabilities only allow appdata scope).
+#[tauri::command]
+fn copy_custom_app_icon(app: tauri::AppHandle, src: String) -> Result<String, String> {
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = app_data.join("custom-icons");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ext = std::path::Path::new(&src)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = dir.join(format!("user-{}.{}", ts, ext));
+    std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/* ── Fonts ──────────────────────────────────────────────── */
+
+#[derive(serde::Serialize, Clone)]
+struct SystemFont {
+    family: String,
+    path: String,
+}
+
+/// Pull the English (or fallback) `family name` out of a TTF/OTF/TTC.
+/// Returns `None` if the file isn't a parseable font or has no family entry.
+fn read_family_name(path: &std::path::Path) -> Option<String> {
+    let data = std::fs::read(path).ok()?;
+    // TTC (collections) wrap multiple faces; index 0 is fine for picker UI —
+    // weights/styles inside the same family share the family name anyway.
+    let face = ttf_parser::Face::parse(&data, 0).ok()?;
+    let mut english: Option<String> = None;
+    let mut fallback: Option<String> = None;
+    for name in face.names() {
+        if name.name_id != ttf_parser::name_id::FAMILY {
+            continue;
+        }
+        if let Some(s) = name.to_string() {
+            // Prefer Mac/Windows English entries; otherwise take whatever we find.
+            let is_english = matches!(
+                (name.platform_id, name.language_id),
+                (ttf_parser::PlatformId::Windows, 0x0409)
+                    | (ttf_parser::PlatformId::Macintosh, 0)
+                    | (ttf_parser::PlatformId::Unicode, _)
+            );
+            if is_english && english.is_none() {
+                english = Some(s);
+            } else if fallback.is_none() {
+                fallback = Some(s);
+            }
+        }
+    }
+    english.or(fallback)
+}
+
+fn system_font_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(win) = std::env::var("WINDIR") {
+            dirs.push(std::path::PathBuf::from(win).join("Fonts"));
+        } else {
+            dirs.push(std::path::PathBuf::from(r"C:\Windows\Fonts"));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            dirs.push(std::path::PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(std::path::PathBuf::from("/System/Library/Fonts"));
+        dirs.push(std::path::PathBuf::from("/Library/Fonts"));
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            dirs.push(home.join("Library/Fonts"));
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        dirs.push(std::path::PathBuf::from("/usr/share/fonts"));
+        dirs.push(std::path::PathBuf::from("/usr/local/share/fonts"));
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            dirs.push(home.join(".fonts"));
+            dirs.push(home.join(".local/share/fonts"));
+        }
+    }
+    dirs
+}
+
+/// Cached list of system fonts. Populated lazily on first call — scanning
+/// can take 100ms-2s on machines with thousands of fonts. We only refresh
+/// when the user explicitly invokes `refresh_system_fonts`.
+static SYSTEM_FONTS_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<SystemFont>>>> =
+    std::sync::OnceLock::new();
+
+fn scan_system_fonts() -> Vec<SystemFont> {
+    use std::collections::HashMap;
+    let mut by_family: HashMap<String, SystemFont> = HashMap::new();
+    for dir in system_font_dirs() {
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(&dir).into_iter().flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
+                continue;
+            }
+            if let Some(family) = read_family_name(path) {
+                // First face for a family wins — we don't need every weight.
+                by_family.entry(family.clone()).or_insert(SystemFont {
+                    family,
+                    path: path.to_string_lossy().into_owned(),
+                });
+            }
+        }
+    }
+    let mut list: Vec<SystemFont> = by_family.into_values().collect();
+    list.sort_by(|a, b| a.family.to_lowercase().cmp(&b.family.to_lowercase()));
+    list
+}
+
+#[tauri::command]
+fn list_system_fonts() -> Vec<SystemFont> {
+    let cache = SYSTEM_FONTS_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+    let list = scan_system_fonts();
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(list.clone());
+    }
+    list
+}
+
+#[tauri::command]
+fn refresh_system_fonts() -> Vec<SystemFont> {
+    let list = scan_system_fonts();
+    let cache = SYSTEM_FONTS_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(list.clone());
+    }
+    list
+}
+
+/// Read a font file and return its parsed family name. The frontend uses
+/// this both for system fonts (rendering each option in its own family) and
+/// for newly-imported custom fonts (so the @font-face rule uses the right
+/// canonical name in the picker preview).
+#[tauri::command]
+fn read_font_family(path: String) -> Result<String, String> {
+    read_family_name(std::path::Path::new(&path))
+        .ok_or_else(|| "Could not parse font family name".to_string())
+}
+
+/// Copy a user-picked font into `<app_data>/fonts/`. Same rationale as
+/// `copy_custom_app_icon` — frontend can't read arbitrary disk paths under
+/// our plugin-fs scope, so we do the copy in std::fs.
+#[tauri::command]
+fn copy_custom_font(app: tauri::AppHandle, src: String) -> Result<String, String> {
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = app_data.join("fonts");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ext = std::path::Path::new(&src)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("ttf")
+        .to_lowercase();
+    if !matches!(ext.as_str(), "ttf" | "otf" | "woff" | "woff2") {
+        return Err(format!("Unsupported font format: {}", ext));
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = dir.join(format!("user-{}.{}", ts, ext));
+    std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn save_framerate_config(app: tauri::AppHandle, target: u32, unlocked: bool) {
     if let Ok(config_dir) = app.path().app_data_dir() {
@@ -215,6 +471,13 @@ pub fn run() {
             ytmusic_import::ytmusic_import_start,
             ytmusic_import::ytmusic_import_stop,
             save_framerate_config,
+            set_app_icon,
+            set_custom_app_icon,
+            copy_custom_app_icon,
+            list_system_fonts,
+            refresh_system_fonts,
+            read_font_family,
+            copy_custom_font,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

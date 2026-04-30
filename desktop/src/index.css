@@ -658,3 +658,114 @@ body.hw-accel img,
 body.hw-accel canvas {
   transform: translateZ(0);
 }
+
+/* ── SoundWave hero block ──────────────────────────────────── */
+@keyframes sw-bar {
+  0%,
+  100% {
+    transform: scaleY(0.22);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Particle drift — translate+opacity only (no scale). Scale on ~20 elements
+   forces relayout of their composite rect every frame; pure translate stays
+   on the GPU compositor. */
+@keyframes sw-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translate3d(0, -22px, 0);
+    opacity: 0;
+  }
+}
+
+/* Aurora orbs carry a heavy `filter: blur()`; rotate/scale would force the
+   blur kernel to recompute every frame (huge GPU cost). Stick to translate —
+   that's a cheap composite transform, blur result stays cached. */
+@keyframes sw-aurora {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(3%, -1.5%, 0);
+  }
+}
+
+@keyframes sw-shine {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+@keyframes sw-pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+.soundwave-bar {
+  transform-origin: center;
+  animation: sw-bar 1.4s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Progress-based waveform: two stacked bar layers, the accent one clipped
+   by --sw-progress (0%–100%). Only the clip-path changes at runtime — GPU
+   composite-only, zero layout, zero React re-renders during playback. */
+.sw-bars {
+  --sw-progress: 0%;
+}
+
+.sw-bar {
+  min-height: 3px;
+  border-radius: 1.5px;
+}
+
+.sw-layer-muted .sw-bar {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.sw-layer-accent {
+  clip-path: inset(0 calc(100% - var(--sw-progress)) 0 0);
+  -webkit-clip-path: inset(0 calc(100% - var(--sw-progress)) 0 0);
+  /* No transition: the audio engine pushes time updates ~60Hz already,
+     so any CSS transition just adds 120ms of accumulated lag-chase as
+     each new --sw-progress restarts the previous animation mid-flight.
+     With instant updates the bars stay locked to the progress line. */
+  will-change: clip-path;
+}
+
+.sw-layer-accent .sw-bar {
+  background: var(--color-accent);
+  box-shadow: 0 0 6px var(--color-accent-glow);
+}
+
+.soundwave-title {
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(255, 255, 255, 0.72) 40%,
+    var(--color-accent) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}

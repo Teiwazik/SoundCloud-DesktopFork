@@ -6,8 +6,11 @@ const WHITELIST = [
   '127.0.0.1',
   'tauri.localhost',
   'scproxy.localhost',
-  'proxy.soundcloud.su',
-  'api.soundcloud.su',
+  'proxy.scdinternal.site',
+  'api.scdinternal.site',
+  'stream.scdinternal.site',
+  'stream-premium.scdinternal.site',
+  'storage.scdinternal.site',
   'unpkg.com',
 ];
 const IS_WINDOWS = navigator.userAgent.includes('Windows');

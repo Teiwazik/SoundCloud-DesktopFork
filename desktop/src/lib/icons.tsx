@@ -51,6 +51,7 @@ import {
   Repeat as _Repeat,
   Repeat1 as _Repeat1,
   Repeat2 as _Repeat2,
+  RefreshCw as _RefreshCw,
   RotateCcw as _RotateCcw,
   Search as _Search,
   Send as _Send,
@@ -59,6 +60,7 @@ import {
   SkipBack as _SkipBack,
   SkipForward as _SkipForward,
   SlidersHorizontal as _SlidersHorizontal,
+  Smartphone as _Smartphone,
   Sparkles as _Sparkles,
   Square as _Square,
   Star as _Star,
@@ -157,9 +159,11 @@ export const VolumeX = memo(_VolumeX);
 export const X = memo(_X);
 export const Link = memo(_Link2);
 export const SlidersHorizontal = memo(_SlidersHorizontal);
+export const Smartphone = memo(_Smartphone);
 export const AudioLines = memo(_AudioLines);
 export const Power = memo(_Power);
 export const RotateCcw = memo(_RotateCcw);
+export const RefreshCw = memo(_RefreshCw);
 export const Youtube = memo(({ size, className }: { size?: number; className?: string }) => (
   <SimpleIcon icon={siYoutube} size={size} className={className} />
 ));

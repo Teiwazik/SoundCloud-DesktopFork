@@ -193,7 +193,7 @@ export function useHistory(limit = 50) {
     if (!query.data) return [];
     const arr: HistoryEntry[] = [];
     for (const page of query.data.pages) {
-      for (const e of page.collection) arr.push(e);
+      for (const e of (page.collection ?? [])) arr.push(e);
     }
     return arr;
   }, [query.data]);
@@ -229,7 +229,7 @@ export function useLocalLikes(limit = 50) {
     if (!query.data) return [];
     const arr: Track[] = [];
     for (const page of query.data.pages) {
-      for (const t of page.collection) arr.push(t);
+      for (const t of (page.collection ?? [])) arr.push(t);
     }
     return arr;
   }, [query.data]);
@@ -269,7 +269,7 @@ export function useFeed() {
     const arr: FeedItem[] = [];
     const seen = new Set<string>();
     for (const page of query.data.pages) {
-      for (const item of page.collection) {
+      for (const item of (page.collection ?? [])) {
         const urn = item.origin?.urn;
         if (urn && !seen.has(urn)) {
           seen.add(urn);
@@ -318,7 +318,7 @@ export function useLikedTracks(limit = 30) {
     if (!query.data) return [];
     const arr: Track[] = [];
     for (const page of query.data.pages) {
-      for (const t of page.collection) arr.push(t);
+      for (const t of (page.collection ?? [])) arr.push(t);
     }
     return arr;
   }, [query.data]);
@@ -355,9 +355,9 @@ export function fetchAllLikedTracks(pageSize = 200): Promise<Track[]> {
       if (cursor) params.set('cursor', cursor);
 
       const page = await api<TrackListResponse>(`/me/likes/tracks?${params}`);
-      for (const t of page.collection) all.push(t);
+      for (const t of (page.collection ?? [])) all.push(t);
 
-      void rememberTracks(page.collection);
+      void rememberTracks((page.collection ?? []));
 
       const next = page.next_href ? extractPagination(page.next_href) : undefined;
       if (!next?.cursor) break;
@@ -422,7 +422,7 @@ export function useTrackComments(trackUrn: string | undefined) {
     if (!query.data) return [];
     const arr: Comment[] = [];
     for (const page of query.data.pages) {
-      for (const c of page.collection) arr.push(c);
+      for (const c of (page.collection ?? [])) arr.push(c);
     }
     return arr;
   }, [query.data]);
@@ -517,7 +517,7 @@ export function usePlaylistTracks(playlistUrn: string | undefined) {
     if (!query.data) return [];
     const arr: Track[] = [];
     for (const page of query.data.pages) {
-      for (const t of page.collection) arr.push(t);
+      for (const t of (page.collection ?? [])) arr.push(t);
     }
     return arr;
   }, [query.data]);
@@ -563,7 +563,7 @@ export function useUserTracks(userUrn: string | undefined) {
     if (!query.data) return [];
     const arr: Track[] = [];
     for (const page of query.data.pages) {
-      for (const t of page.collection) arr.push(t);
+      for (const t of (page.collection ?? [])) arr.push(t);
     }
     return arr;
   }, [query.data]);
@@ -588,10 +588,10 @@ export function useUserPopularTracks(userUrn: string | undefined) {
         const page = await api<TrackListResponse>(
           `/users/${encodeURIComponent(userUrn!)}/tracks?${params}`,
         );
-        for (const t of page.collection) all.push(t);
+        for (const t of (page.collection ?? [])) all.push(t);
 
         const next = page.next_href ? extractPagination(page.next_href) : undefined;
-        if (!next?.cursor || page.collection.length === 0) break;
+        if (!next?.cursor || (page.collection ?? []).length === 0) break;
         cursor = next.cursor;
       }
 
@@ -633,7 +633,7 @@ export function useUserPlaylists(userUrn: string | undefined) {
     if (!query.data) return [];
     const arr: Playlist[] = [];
     for (const page of query.data.pages) {
-      for (const p of page.collection) arr.push(p);
+      for (const p of (page.collection ?? [])) arr.push(p);
     }
     return arr;
   }, [query.data]);
@@ -670,7 +670,7 @@ export function useUserLikedTracks(userUrn: string | undefined) {
     if (!query.data) return [];
     const arr: Track[] = [];
     for (const page of query.data.pages) {
-      for (const t of page.collection) arr.push(t);
+      for (const t of (page.collection ?? [])) arr.push(t);
     }
     return arr;
   }, [query.data]);
@@ -705,7 +705,7 @@ export function useUserFollowings(userUrn: string | undefined) {
     if (!query.data) return [];
     const arr: SCUser[] = [];
     for (const page of query.data.pages) {
-      for (const u of page.collection) arr.push(u);
+      for (const u of (page.collection ?? [])) arr.push(u);
     }
     return arr;
   }, [query.data]);
@@ -749,7 +749,7 @@ export function useMyFollowings(limit = 30) {
     if (!query.data) return [];
     const arr: SCUser[] = [];
     for (const page of query.data.pages) {
-      for (const u of page.collection) arr.push(u);
+      for (const u of (page.collection ?? [])) arr.push(u);
     }
     return arr;
   }, [query.data]);
@@ -782,7 +782,7 @@ export function useMyLikedPlaylists(limit = 30) {
     if (!query.data) return [];
     const arr: Playlist[] = [];
     for (const page of query.data.pages) {
-      for (const p of page.collection) arr.push(p);
+      for (const p of (page.collection ?? [])) arr.push(p);
     }
     return arr;
   }, [query.data]);
@@ -820,7 +820,7 @@ export function useMyPlaylists(limit = 30, enabled = true) {
     if (!query.data) return [];
     const arr: Playlist[] = [];
     for (const page of query.data.pages) {
-      for (const p of page.collection) arr.push(p);
+      for (const p of (page.collection ?? [])) arr.push(p);
     }
     return arr;
   }, [query.data]);
@@ -939,7 +939,7 @@ export function useSearchTracks(q: string) {
     const arr: Track[] = [];
     const seen = new Set<string>();
     for (const page of query.data.pages) {
-      for (const t of page.collection) {
+      for (const t of (page.collection ?? [])) {
         if (!t?.urn || seen.has(t.urn)) continue;
         seen.add(t.urn);
         arr.push(t);
@@ -972,7 +972,7 @@ export function useSearchPlaylists(q: string) {
     if (!query.data) return [];
     const arr: Playlist[] = [];
     for (const page of query.data.pages) {
-      for (const p of page.collection) arr.push(p);
+      for (const p of (page.collection ?? [])) arr.push(p);
     }
     return arr;
   }, [query.data]);
@@ -1001,7 +1001,7 @@ export function useSearchUsers(q: string) {
     if (!query.data) return [];
     const arr: SCUser[] = [];
     for (const page of query.data.pages) {
-      for (const u of page.collection) arr.push(u);
+      for (const u of (page.collection ?? [])) arr.push(u);
     }
     return arr;
   }, [query.data]);

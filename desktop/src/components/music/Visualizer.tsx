@@ -47,7 +47,7 @@ function ensureVisualizerBinsSubscription() {
     });
 }
 
-function subscribeVisualizerBins(listener: VisualizerBinsListener) {
+export function subscribeVisualizerBins(listener: VisualizerBinsListener) {
   visualizerBinsListeners.add(listener);
   ensureVisualizerBinsSubscription();
 

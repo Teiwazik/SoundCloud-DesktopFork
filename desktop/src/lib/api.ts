@@ -165,7 +165,9 @@ export async function api<T = unknown>(path: string, options: ApiRequestOptions 
     });
     useAppStatusStore.getState().setBackendReachable(true);
   } catch (error) {
-    useAppStatusStore.getState().setBackendReachable(false);
+    // Don't auto-flip to offline on a single fetch exception — some 7.0.1
+    // endpoints may not exist yet for the fork, and one failure shouldn't
+    // hide the whole app. Backend reachability stays whatever it was.
     throw error;
   } finally {
     timed.cleanup();

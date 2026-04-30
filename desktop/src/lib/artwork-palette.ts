@@ -226,6 +226,40 @@ function buildPaletteFromPixels(data: Uint8ClampedArray): ArtworkGradientPalette
   const secondaryHsl = rgbToHsl(secondary.color);
   const tertiaryHsl = rgbToHsl(tertiary.color);
 
+  // Monochrome / near-grayscale cover detection.
+  //
+  // For a fully grayscale image `rgbToHsl` returns hue=0 (red) for every
+  // pixel because there's no chroma to derive a hue from. The downstream
+  // gradient code then forces saturation back up to ≥0.28 (line below),
+  // which paints a desaturated *red* gradient on a pure B&W cover — the
+  // "weird color" users see on monochrome artwork.
+  //
+  // If the weighted average saturation across the top swatches is below
+  // a small threshold, we emit an achromatic gradient built from the
+  // luminance distribution alone — dark grey → mid grey → near-white.
+  const topSwatches = swatches.slice(0, 4);
+  const monoWeight = topSwatches.reduce((sum, sw) => sum + sw.weight, 0);
+  const monoAvgSat =
+    monoWeight > 0
+      ? topSwatches.reduce((sum, sw) => sum + sw.saturation * sw.weight, 0) / monoWeight
+      : 0;
+  const MONOCHROME_SAT_THRESHOLD = 0.06;
+  if (monoAvgSat < MONOCHROME_SAT_THRESHOLD) {
+    const lumValues = [primaryHsl[2], secondaryHsl[2], tertiaryHsl[2]];
+    const lo = clamp(Math.min(...lumValues) * 0.36, 0.04, 0.18);
+    const hi = clamp(Math.max(...lumValues) * 1.02 + 0.06, 0.78, 1);
+    const mid = clamp((lo + hi) / 2 + 0.1, 0.55, 0.92);
+    const monoA = hslToRgb([0, 0, lo]);
+    const monoAccent = hslToRgb([0, 0, mid]);
+    const monoC = hslToRgb([0, 0, hi]);
+    return {
+      accent: monoAccent,
+      gradientA: rgbToHex(monoA),
+      gradientB: rgbToHex(monoAccent),
+      gradientC: rgbToHex(monoC),
+    };
+  }
+
   const accentHue = primaryHsl[0];
   const accentSaturation = clamp(
     Math.max(primaryHsl[1], secondaryHsl[1] * 0.9) * 1.08 + 0.04,

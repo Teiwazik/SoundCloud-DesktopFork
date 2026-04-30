@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { LikeButton } from '../components/music/LikeButton';
 import { MixCard } from '../components/music/MixCard';
-import { SoundWaveHero } from '../components/music/SoundWaveHero';
+import { SoundWaveBlock } from '../components/music/soundwave';
 import { TrackCard } from '../components/music/TrackCard';
 import { HorizontalScroll } from '../components/ui/HorizontalScroll';
 import { Skeleton } from '../components/ui/Skeleton';
@@ -705,7 +705,7 @@ export function Home() {
         <div className="mt-5 h-px bg-gradient-to-r from-white/[0.08] via-white/[0.04] to-transparent w-full" />
       </section>
 
-      <SoundWaveHero />
+      <SoundWaveBlock />
       <MixShelf pool={pool} isLoading={isPoolLoading} />
       <FallbackShelf />
       <LikedShelf likedTracks={likedTracks} isLoading={isLikesLoading} />

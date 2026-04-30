@@ -99,6 +99,35 @@ export type DiscordRpcMode = 'text' | 'track' | 'artist' | 'activity';
 export type DiscordRpcButtonMode = 'soundcloud' | 'app' | 'both';
 export type ApiMode = 'auto' | 'custom';
 
+export type AppIconVariant = 'default' | 'inverted' | 'upstream' | 'wave' | 'custom';
+
+export type AppFontMode = 'default' | 'system' | 'custom';
+
+/** Sensible default UI-font stack — Inter where available, then platform UI
+ *  defaults. This matches the original `--font-sans` value in index.css and
+ *  is what the app shows when the user hasn't picked anything. */
+export const DEFAULT_FONT_STACK =
+  '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+
+export const APP_FONT_SIZE_MIN = 11;
+export const APP_FONT_SIZE_MAX = 20;
+export const APP_FONT_SIZE_DEFAULT = 14;
+
+export const APP_UI_SCALE_MIN = 0.85;
+export const APP_UI_SCALE_MAX = 1.2;
+export const APP_UI_SCALE_DEFAULT = 1;
+
+/** Frontend-side metadata for the icon picker. Filenames here must match
+ *  PNGs in `public/app-icons/` AND the variants baked into `set_app_icon`
+ *  Rust command (src-tauri/icons/variants/<name>.png). The 'custom' entry is
+ *  rendered separately (file picker), so it's not in this list. */
+export const APP_ICON_VARIANTS: Array<{ id: AppIconVariant; labelKey: string }> = [
+  { id: 'default', labelKey: 'settings.appIconDefault' },
+  { id: 'inverted', labelKey: 'settings.appIconInverted' },
+  { id: 'upstream', labelKey: 'settings.appIconUpstream' },
+  { id: 'wave', labelKey: 'settings.appIconWave' },
+];
+
 export interface SidebarPinnedPlaylist {
   urn: string;
   title: string;
@@ -224,6 +253,26 @@ export interface SettingsState {
   soundwaveGenreStrict: boolean;
   soundwaveSelectedGenres: string[];
   soundwaveHideLiked: boolean;
+  soundwaveLanguages: string[];
+  soundwaveMode: 'similar' | 'diverse';
+  appIcon: AppIconVariant;
+  /** Absolute path to the user-supplied PNG/ICO when `appIcon === 'custom'`.
+   *  Stored separately so switching back to a built-in variant doesn't lose it. */
+  customAppIconPath: string | null;
+  /** Which source the app font is pulled from. */
+  appFontMode: AppFontMode;
+  /** When `appFontMode === 'system'`, the picked CSS family name (must match
+   *  a name installed at the OS level so the webview can render it). */
+  appFontSystemFamily: string | null;
+  /** When `appFontMode === 'custom'`, absolute path to the TTF/OTF/WOFF in
+   *  `<appData>/fonts/`. The frontend reads it at startup, registers an
+   *  @font-face, and applies the family. */
+  appFontCustomPath: string | null;
+  /** Family name for the active custom font (parsed from the file once,
+   *  cached so we don't re-parse on every reload). */
+  appFontCustomFamily: string | null;
+  appFontSize: number;
+  appUiScale: number;
   setAccentColor: (color: string) => void;
   setBgPrimary: (bg: string) => void;
   setThemePreset: (id: ThemePreset) => void;
@@ -305,6 +354,15 @@ export interface SettingsState {
   setSoundwaveGenreStrict: (v: boolean) => void;
   setSoundwaveSelectedGenres: (genres: string[]) => void;
   setSoundwaveHideLiked: (v: boolean) => void;
+  setSoundwaveLanguages: (langs: string[]) => void;
+  setSoundwaveMode: (mode: 'similar' | 'diverse') => void;
+  setAppIcon: (icon: AppIconVariant) => void;
+  setCustomAppIconPath: (path: string | null) => void;
+  setAppFontMode: (mode: AppFontMode) => void;
+  setAppFontSystemFamily: (family: string | null) => void;
+  setAppFontCustom: (path: string | null, family: string | null) => void;
+  setAppFontSize: (size: number) => void;
+  setAppUiScale: (scale: number) => void;
   resetTheme: () => void;
 }
 
@@ -413,6 +471,16 @@ const DEFAULTS = {
   soundwaveGenreStrict: true,
   soundwaveSelectedGenres: [],
   soundwaveHideLiked: false,
+  soundwaveLanguages: [],
+  soundwaveMode: 'similar' as const,
+  appIcon: 'default' as AppIconVariant,
+  customAppIconPath: null as string | null,
+  appFontMode: 'default' as AppFontMode,
+  appFontSystemFamily: null as string | null,
+  appFontCustomPath: null as string | null,
+  appFontCustomFamily: null as string | null,
+  appFontSize: APP_FONT_SIZE_DEFAULT,
+  appUiScale: APP_UI_SCALE_DEFAULT,
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -596,6 +664,28 @@ export const useSettingsStore = create<SettingsState>()(
       setSoundwaveGenreStrict: (soundwaveGenreStrict) => set({ soundwaveGenreStrict }),
       setSoundwaveSelectedGenres: (soundwaveSelectedGenres) => set({ soundwaveSelectedGenres }),
       setSoundwaveHideLiked: (soundwaveHideLiked) => set({ soundwaveHideLiked }),
+      setSoundwaveLanguages: (soundwaveLanguages) => set({ soundwaveLanguages }),
+      setSoundwaveMode: (soundwaveMode) => set({ soundwaveMode }),
+      setAppIcon: (appIcon) => set({ appIcon }),
+      setCustomAppIconPath: (customAppIconPath) => set({ customAppIconPath }),
+      setAppFontMode: (appFontMode) => set({ appFontMode }),
+      setAppFontSystemFamily: (appFontSystemFamily) => set({ appFontSystemFamily }),
+      setAppFontCustom: (appFontCustomPath, appFontCustomFamily) =>
+        set({ appFontCustomPath, appFontCustomFamily }),
+      setAppFontSize: (appFontSize) =>
+        set({
+          appFontSize: Math.min(
+            APP_FONT_SIZE_MAX,
+            Math.max(APP_FONT_SIZE_MIN, Math.round(appFontSize)),
+          ),
+        }),
+      setAppUiScale: (appUiScale) =>
+        set({
+          appUiScale: Math.min(
+            APP_UI_SCALE_MAX,
+            Math.max(APP_UI_SCALE_MIN, Math.round(appUiScale * 100) / 100),
+          ),
+        }),
       resetTheme: () =>
         set({
           accentColor: DEFAULTS.accentColor,
@@ -766,6 +856,16 @@ export const useSettingsStore = create<SettingsState>()(
         soundwaveGenreStrict: s.soundwaveGenreStrict,
         soundwaveSelectedGenres: s.soundwaveSelectedGenres,
         soundwaveHideLiked: s.soundwaveHideLiked,
+        soundwaveLanguages: s.soundwaveLanguages,
+        soundwaveMode: s.soundwaveMode,
+        appIcon: s.appIcon,
+        customAppIconPath: s.customAppIconPath,
+        appFontMode: s.appFontMode,
+        appFontSystemFamily: s.appFontSystemFamily,
+        appFontCustomPath: s.appFontCustomPath,
+        appFontCustomFamily: s.appFontCustomFamily,
+        appFontSize: s.appFontSize,
+        appUiScale: s.appUiScale,
       }),
     },
   ),

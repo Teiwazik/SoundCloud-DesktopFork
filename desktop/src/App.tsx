@@ -1,3 +1,4 @@
+import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
@@ -7,6 +8,7 @@ import { AppShell } from './components/layout/AppShell';
 import { ThemeProvider } from './components/ThemeProvider';
 import { UpdateChecker } from './components/UpdateChecker';
 import { ApiError, setSessionExpiredHandler, setUnauthorizedHandler } from './lib/api';
+import { applyAppFont } from './lib/app-font';
 import { hasAuthHydrated } from './lib/auth-hydration';
 import { Home } from './pages/Home';
 import { Library } from './pages/Library';
@@ -19,6 +21,7 @@ import { TrackPage } from './pages/TrackPage';
 import { UserPage } from './pages/UserPage';
 import { useAppStatusStore } from './stores/app-status';
 import { useAuthStore } from './stores/auth';
+import { useSettingsStore } from './stores/settings';
 
 const AUTH_BOOTSTRAP_TIMEOUT_MS = 12000;
 
@@ -84,6 +87,42 @@ function AppInner() {
   );
   const [checking, setChecking] = useState(true);
   const [authHydrated, setAuthHydrated] = useState(() => useAuthStore.persist.hasHydrated());
+
+  // Re-apply persisted app icon choice on each app start. Tauri uses the
+  // built-in icon from tauri.conf.json at boot — if the user previously
+  // picked something else, we override here as soon as React mounts.
+  useEffect(() => {
+    const s = useSettingsStore.getState();
+    if (s.appIcon === 'custom' && s.customAppIconPath) {
+      void invokeTauri('set_custom_app_icon', { path: s.customAppIconPath }).catch(() => {
+        // File missing/unreadable — fall back to default so the user isn't
+        // stuck with a broken titlebar icon.
+        void invokeTauri('set_app_icon', { variant: 'default' }).catch(() => {});
+      });
+    } else {
+      void invokeTauri('set_app_icon', { variant: s.appIcon }).catch(() => {});
+    }
+  }, []);
+
+  // Re-apply the chosen font on every relevant settings change. Subscribing
+  // to a slice (not the whole store) keeps this effect quiet when unrelated
+  // settings update.
+  const fontMode = useSettingsStore((s) => s.appFontMode);
+  const fontSystemFamily = useSettingsStore((s) => s.appFontSystemFamily);
+  const fontCustomPath = useSettingsStore((s) => s.appFontCustomPath);
+  const fontCustomFamily = useSettingsStore((s) => s.appFontCustomFamily);
+  const fontSize = useSettingsStore((s) => s.appFontSize);
+  const uiScale = useSettingsStore((s) => s.appUiScale);
+  useEffect(() => {
+    void applyAppFont({
+      mode: fontMode,
+      systemFamily: fontSystemFamily,
+      customPath: fontCustomPath,
+      customFamily: fontCustomFamily,
+      textSize: fontSize,
+      uiScale,
+    });
+  }, [fontMode, fontSystemFamily, fontCustomPath, fontCustomFamily, fontSize, uiScale]);
 
   useEffect(() => {
     const syncOnline = () => {
