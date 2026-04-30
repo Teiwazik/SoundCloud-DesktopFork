@@ -411,7 +411,6 @@ const AppFontSection = React.memo(function AppFontSection() {
   const mode = useSettingsStore((s) => s.appFontMode);
   const systemFamily = useSettingsStore((s) => s.appFontSystemFamily);
   const customPath = useSettingsStore((s) => s.appFontCustomPath);
-  const customFamily = useSettingsStore((s) => s.appFontCustomFamily);
   const size = useSettingsStore((s) => s.appFontSize);
   const uiScale = useSettingsStore((s) => s.appUiScale);
   const setMode = useSettingsStore((s) => s.setAppFontMode);
