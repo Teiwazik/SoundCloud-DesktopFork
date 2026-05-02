@@ -190,13 +190,42 @@ pub async fn proxy_request(encoded: &str) -> ProxyResult {
     }
 }
 
-/// Handler for scproxy:// URI scheme protocol (used by img.src hooks)
+/// Long-lived caching for successful image responses. SoundCloud artwork URLs
+/// are content-addressable (artwork-XXX), so effectively immutable — without
+/// `immutable` the WebView re-hits the proxy on every render even though the
+/// disk cache returns instantly.
+fn cache_control_for(status: u16) -> &'static str {
+    if status == 200 {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    }
+}
+
+/// Handler for scproxy:// URI scheme protocol (used by img.src hooks).
+///
+/// Routes `/img/<encoded>` to the permanent image cache (7.1.0 port — see
+/// `image_cache.rs`). Everything else falls through to the existing proxy.
 pub async fn handle_uri(request: http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
-    let encoded = request.uri().path().trim_start_matches('/');
+    let path = request.uri().path();
+
+    if let Some(encoded) = path.strip_prefix("/img/") {
+        let result = crate::image_cache::handle(encoded).await;
+        return http::Response::builder()
+            .status(result.status)
+            .header("content-type", &result.content_type)
+            .header("cache-control", cache_control_for(result.status))
+            .header("access-control-allow-origin", "*")
+            .body(result.data)
+            .unwrap();
+    }
+
+    let encoded = path.trim_start_matches('/');
     let result = proxy_request(encoded).await;
     http::Response::builder()
         .status(result.status)
         .header("content-type", &result.content_type)
+        .header("cache-control", cache_control_for(result.status))
         .header("access-control-allow-origin", "*")
         .body(result.data)
         .unwrap()

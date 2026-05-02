@@ -134,6 +134,7 @@
     "total": "Всього",
     "audioCacheSize": "Аудіо",
     "assetsCacheSize": "Зображення та файли",
+    "imagesCacheSize": "Постійний кеш зображень",
     "clearCache": "Очистити",
     "cacheCleared": "Кеш очищено",
     "appearance": "Зовнішній вигляд",

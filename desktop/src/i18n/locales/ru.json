@@ -209,6 +209,7 @@
     "loadingTracks": "Загрузка списка треков...",
     "cacheProgress": "Прогресс",
     "lyricsCacheSize": "Кэш текстов песен",
+    "imagesCacheSize": "Постоянный кэш картинок",
     "appearance": "Оформление",
     "accentColor": "Цвет акцента",
     "backgroundImage": "Фоновое изображение",

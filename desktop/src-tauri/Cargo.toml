@@ -45,6 +45,11 @@ tokio-tungstenite = "0.21.0"
 symphonia = { version = "0.5.5", default-features = false, features = ["aac", "mp3", "isomp4", "ogg", "wav", "pcm", "vorbis"] }
 ttf-parser = "0.21"
 walkdir = "2"
+# Added for upstream 7.1.0 port: track_cache (sc_anon HLS) + image_cache.
+chrono = { version = "0.4", features = ["clock"] }
+url = "2"
+regex = { version = "1", default-features = false, features = ["std"] }
+bytes = "1"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 soundtouch = { version = "0.5.4", features = ["bundled"] }

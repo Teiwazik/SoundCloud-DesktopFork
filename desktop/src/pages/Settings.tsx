@@ -890,15 +890,18 @@ const CacheSection = React.memo(function CacheSection() {
   const [audioSize, setAudioSize] = useState<number | null>(null);
   const [assetsSize, setAssetsSize] = useState<number | null>(null);
   const [lyricsSize, setLyricsSize] = useState<number | null>(null);
+  const [imagesSize, setImagesSize] = useState<number | null>(null);
   const [clearingAudio, setClearingAudio] = useState(false);
   const [clearingAssets, setClearingAssets] = useState(false);
   const [clearingLyrics, setClearingLyrics] = useState(false);
+  const [clearingImages, setClearingImages] = useState(false);
   const [cachingLikes, setCachingLikes] = useState(false);
 
   useEffect(() => {
     getCacheSize().then(setAudioSize);
     getAssetsCacheSize().then(setAssetsSize);
     getLyricsCacheSize().then(setLyricsSize);
+    invoke<number>('image_cache_size').then(setImagesSize).catch(() => setImagesSize(0));
   }, []);
 
   const handleClearAudio = useCallback(async () => {
@@ -940,6 +943,19 @@ const CacheSection = React.memo(function CacheSection() {
     }
   }, [t]);
 
+  const handleClearImages = useCallback(async () => {
+    setClearingImages(true);
+    try {
+      await invoke('image_cache_clear');
+      setImagesSize(0);
+      toast.success(t('settings.cacheCleared'));
+    } catch {
+      toast.error(t('common.error'));
+    } finally {
+      setClearingImages(false);
+    }
+  }, [t]);
+
   const cacheTask = useCacheTaskStore();
 
   const handleCacheAllLiked = useCallback(async () => {
@@ -954,7 +970,7 @@ const CacheSection = React.memo(function CacheSection() {
     }
   }, [cacheTask, t]);
 
-  const totalSize = (audioSize ?? 0) + (assetsSize ?? 0) + (lyricsSize ?? 0);
+  const totalSize = (audioSize ?? 0) + (assetsSize ?? 0) + (lyricsSize ?? 0) + (imagesSize ?? 0);
 
   return (
     <section className="bg-white/[0.02] border border-white/[0.05] backdrop-blur-[60px] rounded-3xl p-6 shadow-xl space-y-2">
@@ -964,7 +980,7 @@ const CacheSection = React.memo(function CacheSection() {
         </h3>
 
         <div className="min-w-[80px] flex justify-end">
-          {audioSize !== null && assetsSize !== null && lyricsSize !== null ? (
+          {audioSize !== null && assetsSize !== null && lyricsSize !== null && imagesSize !== null ? (
             <span className="text-[12px] text-white/30 tabular-nums">
               {t('settings.total')}: {formatBytes(totalSize)}
             </span>
@@ -986,6 +1002,14 @@ const CacheSection = React.memo(function CacheSection() {
         size={assetsSize}
         clearing={clearingAssets}
         onClear={handleClearAssets}
+        t={t}
+      />
+      <div className="border-t border-white/[0.04]" />
+      <CacheRow
+        label={t('settings.imagesCacheSize', 'Images cache size')}
+        size={imagesSize}
+        clearing={clearingImages}
+        onClear={handleClearImages}
         t={t}
       />
       <div className="border-t border-white/[0.04]" />

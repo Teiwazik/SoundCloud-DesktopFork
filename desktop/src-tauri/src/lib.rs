@@ -1,11 +1,13 @@
 mod audio_player;
 mod constants;
 mod discord;
+mod image_cache;
 mod proxy;
 mod proxy_server;
 mod server;
 mod spotify_import;
 mod static_server;
+mod track_cache;
 mod tray;
 mod ym_import;
 mod ytmusic_import;
@@ -382,19 +384,40 @@ pub fn run() {
             let audio_dir = cache_dir.join("audio");
             std::fs::create_dir_all(&audio_dir).ok();
 
+            // 7.1.0 port: dedicated dir for likes-cache so it survives normal
+            // cache cleanup (the user opt-in to keep liked tracks offline and
+            // would otherwise lose them on every clear-cache action).
+            let liked_audio_dir = cache_dir.join("audio_liked");
+            std::fs::create_dir_all(&liked_audio_dir).ok();
+
             let assets_dir = cache_dir.join("assets");
             std::fs::create_dir_all(&assets_dir).ok();
 
             let wallpapers_dir = cache_dir.join("wallpapers");
             std::fs::create_dir_all(&wallpapers_dir).ok();
 
+            // 7.1.0 port: image cache lives in app_data_dir (NOT cache_dir) so
+            // the OS doesn't reclaim it. Used by the proxy to memoize remote
+            // covers permanently without re-fetching every cold start.
+            let images_dir = config_dir.join("images");
+            std::fs::create_dir_all(&images_dir).ok();
+
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+
+            let shared_http_client = reqwest::Client::new();
 
             proxy::STATE
                 .set(proxy::State {
                     assets_dir,
-                    http_client: reqwest::Client::new(),
+                    http_client: shared_http_client.clone(),
                     rt_handle: rt.handle().clone(),
+                })
+                .ok();
+
+            image_cache::STATE
+                .set(image_cache::ImageCache {
+                    dir: images_dir,
+                    http_client: shared_http_client,
                 })
                 .ok();
 
@@ -418,6 +441,13 @@ pub fn run() {
             app.manage(audio_state);
             app.manage(spotify_import::SpotifyState::new());
             app.manage(ytmusic_import::YtMusicState::new());
+
+            // 7.1.0 port: track cache state — handles direct SC fallback via
+            // sc_anon HLS reassembly + likes preloading. Needs the app handle
+            // to emit progress events back to the UI during background fills.
+            let mut track_cache_state = track_cache::init(audio_dir, liked_audio_dir);
+            track_cache_state.app_handle = Some(app.handle().clone());
+            app.manage(track_cache_state);
             audio_player::start_tick_emitter(app.handle());
             audio_player::start_media_controls(app.handle());
             audio_player::start_visualizer_thread(app.handle());
@@ -478,6 +508,23 @@ pub fn run() {
             refresh_system_fonts,
             read_font_family,
             copy_custom_font,
+            // 7.1.0 port: direct-from-SC track cache + permanent image cache.
+            track_cache::track_ensure_cached,
+            track_cache::track_is_cached,
+            track_cache::track_get_cache_path,
+            track_cache::track_get_cache_info,
+            track_cache::track_preload,
+            track_cache::track_cache_size,
+            track_cache::track_liked_cache_size,
+            track_cache::track_clear_cache,
+            track_cache::track_clear_liked_cache,
+            track_cache::track_list_cached,
+            track_cache::track_enforce_cache_limit,
+            track_cache::track_cache_likes,
+            track_cache::track_cache_likes_running,
+            track_cache::track_cancel_cache_likes,
+            image_cache::image_cache_size,
+            image_cache::image_cache_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

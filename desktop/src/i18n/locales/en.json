@@ -208,6 +208,7 @@
     "loadingTracks": "Loading tracks list...",
     "cacheProgress": "Progress",
     "lyricsCacheSize": "Lyrics cache size",
+    "imagesCacheSize": "Permanent image cache",
     "appearance": "Appearance",
     "accentColor": "Accent color",
     "backgroundImage": "Background image",

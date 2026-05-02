@@ -138,6 +138,7 @@
     "total": "Total",
     "audioCacheSize": "Audio",
     "assetsCacheSize": "Images & assets",
+    "imagesCacheSize": "Permanent image cache",
     "clearCache": "Clear",
     "cacheCleared": "Cache cleared",
     "appearance": "Appearance",

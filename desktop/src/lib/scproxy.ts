@@ -34,6 +34,20 @@ function scproxyUrl(url: string): string {
   return IS_WINDOWS ? url : `scproxy://localhost/${encoded}`;
 }
 
+// 7.1.0 port: route image requests through the permanent image_cache. Payload
+// shape matches `image_cache::handle` — JSON [target_url, upstream_proxy_url],
+// base64-wrapped. The cache key is the original URL; the upstream is the same
+// scdinternal proxy used elsewhere (handles auth/headers for SC CDN).
+function scproxyImageUrl(url: string): string {
+  const payload = JSON.stringify([url, 'https://proxy.scdinternal.site']);
+  const encoded = btoa(payload);
+  const proxyPort = getProxyPort();
+  if (IS_WINDOWS && proxyPort) {
+    return `http://127.0.0.1:${proxyPort}/img/${encoded}`;
+  }
+  return IS_WINDOWS ? url : `scproxy://localhost/img/${encoded}`;
+}
+
 type ProxyImage = HTMLImageElement & { __origSrc?: string; __origRetryDone?: boolean };
 
 // Hook <img>.src — store original URL to enable retry on error
@@ -45,7 +59,7 @@ Object.defineProperty(HTMLImageElement.prototype, 'src', {
       img.__origSrc = url;
       img.__origRetryDone = false;
       img.style.display = '';
-      url = scproxyUrl(url);
+      url = scproxyImageUrl(url);
     }
     imgSrcDesc.set!.call(this, url);
   },
